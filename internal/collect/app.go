@@ -194,7 +194,9 @@ func (co *Collector) AppDetail(ctx context.Context, name string) (*model.AppDeta
 	}
 	if k, err := co.c.Dynamic.Resource(gvrKustomization).Namespace("flux-system").Get(ctx, "apps", metav1.GetOptions{}); err == nil {
 		st, _ := readReady(*k)
-		det.GitOps.Kustomization = &model.KustDetail{Name: "apps", Ready: st, ReconciledAt: readyAgo(*k)}
+		path, _, _ := unstructured.NestedString(k.Object, "spec", "path")
+		det.GitOps.Kustomization = &model.KustDetail{Name: "apps", Ready: st, ReconciledAt: readyAgo(*k),
+			Path: trimPath(path), URL: kustURL(infraOwner, infraRepo, infraBranch, path)}
 	}
 	if det.Owner && img.Tag != "" {
 		if _, err := co.c.Dynamic.Resource(gvrImagePolicy).Namespace("flux-system").Get(ctx, name, metav1.GetOptions{}); err == nil {
@@ -269,11 +271,17 @@ func (co *Collector) clusterRollup(ctx context.Context, g *model.Graph, ownedNS 
 		}
 		sort.Strings(g.Cluster.GitOps.Controllers)
 	}
-	// kustomizations + flux recency
+	// kustomizations + flux recency (link each to the repo folder it applies)
 	if ksts, err := co.list(ctx, gvrKustomization); err == nil {
+		ko, kr, kb := co.infraRepo(ctx)
 		for _, k := range ksts {
 			st, _ := readReady(k)
-			g.Cluster.GitOps.Kusts = append(g.Cluster.GitOps.Kusts, model.KustDetail{Name: k.GetName(), Ready: st, ReconciledAt: readyAgo(k)})
+			path, _, _ := unstructured.NestedString(k.Object, "spec", "path")
+			kd := model.KustDetail{Name: k.GetName(), Ready: st, ReconciledAt: readyAgo(k), Path: trimPath(path)}
+			if src, _, _ := unstructured.NestedString(k.Object, "spec", "sourceRef", "name"); src == "" || src == "flux-system" {
+				kd.URL = kustURL(ko, kr, kb, path)
+			}
+			g.Cluster.GitOps.Kusts = append(g.Cluster.GitOps.Kusts, kd)
 			if (k.GetName() == "apps" || k.GetName() == "flux-system") && g.Cluster.FluxAgo == "" {
 				g.Cluster.FluxAgo = readyAgo(k)
 			}
@@ -312,6 +320,23 @@ func (co *Collector) podUsage(ctx context.Context, ns string) map[string]podU {
 		out[p.Name] = podU{cpu, mem}
 	}
 	return out
+}
+
+func trimPath(p string) string { return strings.TrimPrefix(strings.TrimPrefix(p, "./"), "/") }
+
+// kustURL deep-links to the GitHub folder a Kustomization applies.
+func kustURL(owner, repo, branch, path string) string {
+	if owner == "" || repo == "" {
+		return ""
+	}
+	if branch == "" {
+		branch = "main"
+	}
+	u := "https://github.com/" + owner + "/" + repo + "/tree/" + branch
+	if p := trimPath(path); p != "" {
+		u += "/" + p
+	}
+	return u
 }
 
 func (co *Collector) kustomizationUsesSOPS(ctx context.Context) bool {

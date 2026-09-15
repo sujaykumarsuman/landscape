@@ -11,15 +11,30 @@ Live at **https://projects.sujaykumar.dev/landscape** (deployed by GitOps —
 
 ## What it does
 
-- **Landscape map** — repos, images, Flux (kustomizations, HelmReleases,
-  image-automation) and cluster apps as a graph. Hover a component to trace its
-  path from source to pod and dim the rest; the hover card links to its Source,
-  Workflow, Config and Image. Click an app for its k8s components.
+- **Landscape map** — a boxed four-lane pipeline (repos → build/GHCR → Flux →
+  cluster) with build→scan→deploy flow arrows. Hover a component to trace its
+  path across the lanes and dim the rest; the hover card links to its Source,
+  Workflow, Config and Image. **Click to pin** the highlight (the card hides so
+  the whole flow stays visible; Esc / click-again to unpin). Kustomizations link
+  to the exact infra-repo folder each applies. The lanes shrink to fit and stack
+  on narrow screens.
+- **App page** — click an app for its full k8s component graph (HelmRelease →
+  Deployment → ReplicaSet → Pod, IngressRoute → middlewares → Service, and
+  ConfigMap/Secret/PVC mounts) plus a right rail (selected resource, managed-by,
+  live usage).
+- **Traefik page** — click the Traefik rail for the ingress routing view: every
+  path → app with service, middlewares and TLS.
 - **Metrics** — node CPU/memory, memory by namespace, top pods, pod counts, and
   Flux reconciliation status, from the in-cluster metrics-server.
 
 It distinguishes **your services** (your GitHub repos / GHCR) from **infra
 tools** (Flux, cert-manager, Traefik — linked to their docs).
+
+## Docs
+
+`CLAUDE.md` (repo rules + the read-only invariant), `docs/ARCHITECTURE.md`,
+`docs/DEPLOY.md` (GitOps flow + verify), `docs/GIT-STRATEGY.md`, `STATUS.md`, and
+`docs/prompts/` (planned work).
 
 ## How it works
 

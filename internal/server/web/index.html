@@ -44,6 +44,15 @@
     <div class="rightbar">
       <div id="health" class="chip">…</div>
       <div id="usage" class="usage"></div>
+      <div class="menu" id="evmenu">
+        <button class="iconbtn" id="evmenubtn" title="Events & warnings" aria-haspopup="true" aria-expanded="false" aria-controls="evmenupop">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
+        </button>
+        <div class="menupop hide" id="evmenupop" role="menu" aria-label="Events">
+          <button role="menuitem" data-act="events">Events browser</button>
+          <button role="menuitem" data-act="warnings">Recent warnings</button>
+        </div>
+      </div>
       <div class="profile">
         <div class="avatar">A</div>
         <span class="who">admin</span>

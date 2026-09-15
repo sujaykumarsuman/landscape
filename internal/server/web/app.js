@@ -5,13 +5,22 @@ const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&
 const api = (p, o) => fetch("./api" + p, Object.assign({ headers: { "Content-Type": "application/json" } }, o));
 const cls = (st) => st === "ok" ? "ok" : st === "failed" ? "err" : "warn";
 
-const state = { graph: null, metrics: null, view: "map", appName: null, app: null, traefik: null, pin: null };
+const state = {
+  graph: null, metrics: null, view: "map", appName: null, app: null, traefik: null, pin: null,
+  appTab: "graph", appEvents: null, logs: null, events: null,
+  eventsFilter: { ns: "", type: "", kind: "", q: "" },
+  logsCtl: { container: "", tail: 500 },
+  metricsCtl: { ns: "", sort: "mem", interval: 15000 },
+};
 let pollTimer = null;
 let started = false;
+const DEFAULT_POLL = 15000;
 
 // window listeners bound once at load (startApp may run again after a re-login)
 window.addEventListener("resize", () => { if (state.view === "app") drawAppEdges(); if (state.view === "traefik") drawTraefikEdges(); });
-window.addEventListener("keydown", (e) => { if (e.key === "Escape" && state.pin) unpin(); });
+window.addEventListener("keydown", (e) => { if (e.key === "Escape") { if (state.pin) unpin(); closeMenu(); } });
+// click outside the events menu closes it
+document.addEventListener("click", (e) => { if (!e.target.closest("#evmenu")) closeMenu(); });
 // browser back/forward: reflect the URL into the view (no new history entry)
 window.addEventListener("popstate", () => {
   if (!started) return;
@@ -59,10 +68,11 @@ async function startApp() {
   const r = routeFromURL();
   applyRoute(r.view, r.appName);
   history.replaceState(routeState(), "", pathFor(state.view, state.appName));
+  wireMenu();
   syncChrome();
   render();
   await refresh();
-  pollTimer = setInterval(refresh, 15000);
+  setPoll(DEFAULT_POLL);
 }
 
 /* ---------- client-side router (History API) ----------
@@ -92,8 +102,22 @@ function applyRoute(view, appName) {
   state.appName = view === "app" ? appName : null;
   state.app = null;
   state.traefik = null;
+  state.appTab = "graph";
+  state.appEvents = null;
+  state.logs = null;
   state.pin = null;
   $("#hover").classList.add("hide");
+  closeMenu();
+  // a paused/altered metrics cadence shouldn't linger once we leave that view
+  if (view !== "metrics" && state.metricsCtl.interval !== DEFAULT_POLL) {
+    state.metricsCtl.interval = DEFAULT_POLL;
+    setPoll(DEFAULT_POLL);
+  }
+}
+// (re)build the background poll timer at the given cadence (0 = paused)
+function setPoll(ms) {
+  clearInterval(pollTimer);
+  pollTimer = ms > 0 ? setInterval(refresh, ms) : null;
 }
 // navigate: change state, push a history entry, re-render + fetch
 function navigate(view, appName) {
@@ -108,6 +132,39 @@ function navigate(view, appName) {
 function setView(v) { navigate(v, null); }
 function openApp(name) { navigate("app", name); }
 function openTraefik() { navigate("traefik", null); }
+
+/* ---------- top-right events/logs menu ---------- */
+function wireMenu() {
+  const btn = $("#evmenubtn"), pop = $("#evmenupop");
+  if (!btn || !pop) return;
+  btn.onclick = (e) => { e.stopPropagation(); toggleMenu(); };
+  btn.onkeydown = (e) => {
+    if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") {
+      e.preventDefault(); openMenu();
+      const first = pop.querySelector('[role="menuitem"]'); if (first) first.focus();
+    }
+  };
+  pop.querySelectorAll('[role="menuitem"]').forEach(mi => {
+    mi.onclick = () => { closeMenu(); menuAction(mi.dataset.act); };
+  });
+  pop.onkeydown = (e) => { if (e.key === "Escape") { closeMenu(); btn.focus(); } };
+}
+function menuAction(a) {
+  if (a === "warnings") state.eventsFilter = { ns: "", type: "Warning", kind: "", q: "" };
+  state.events = null;
+  setView("events");
+}
+function toggleMenu() { $("#evmenupop").classList.contains("hide") ? openMenu() : closeMenu(); }
+function openMenu() {
+  const pop = $("#evmenupop"), btn = $("#evmenubtn");
+  if (pop) pop.classList.remove("hide");
+  if (btn) btn.setAttribute("aria-expanded", "true");
+}
+function closeMenu() {
+  const pop = $("#evmenupop"), btn = $("#evmenubtn");
+  if (pop) pop.classList.add("hide");
+  if (btn) btn.setAttribute("aria-expanded", "false");
+}
 function syncChrome() {
   const sub = state.view === "app" || state.view === "traefik";
   $(".nav").classList.toggle("hide", sub);
@@ -118,25 +175,55 @@ function syncChrome() {
 
 async function refresh() {
   try {
+    const calls = [["metrics", api("/metrics")]];
     if (state.view === "app" && state.appName) {
-      const [ar, mr] = await Promise.all([api("/app/" + encodeURIComponent(state.appName)), api("/metrics")]);
-      if (ar.status === 401) { clearInterval(pollTimer); return showLogin(); }
-      if (ar.ok) state.app = await ar.json();
-      if (mr.ok) state.metrics = await mr.json();
+      const n = encodeURIComponent(state.appName);
+      calls.push(["app", api("/app/" + n)]);
+      if (!state.graph) calls.push(["graph", api("/graph")]); // for the header, once
+      if (state.appTab === "events") calls.push(["ev", api("/app/" + n + "/events")]);
+      if (state.appTab === "logs") calls.push(["logs", api("/app/" + n + "/logs" + logsQuery())]);
     } else if (state.view === "traefik") {
-      const [tr, mr] = await Promise.all([api("/traefik"), api("/metrics")]);
-      if (tr.status === 401) { clearInterval(pollTimer); return showLogin(); }
-      if (tr.ok) state.traefik = await tr.json();
-      if (mr.ok) state.metrics = await mr.json();
+      calls.push(["traefik", api("/traefik")]);
+      if (!state.graph) calls.push(["graph", api("/graph")]);
+    } else if (state.view === "events") {
+      calls.push(["events", api("/events" + eventsQuery())]);
+      if (!state.graph) calls.push(["graph", api("/graph")]);
     } else {
-      const [gr, mr] = await Promise.all([api("/graph"), api("/metrics")]);
-      if (gr.status === 401 || mr.status === 401) { clearInterval(pollTimer); return showLogin(); }
-      state.graph = await gr.json();
-      state.metrics = await mr.json();
+      calls.push(["graph", api("/graph")]);
     }
+    const R = await gather(calls);
+    if (is401(R)) return loginOut();
+    if (R.metrics && R.metrics.ok) state.metrics = await R.metrics.json();
+    if (R.graph && R.graph.ok) state.graph = await R.graph.json();
+    if (R.app && R.app.ok) state.app = await R.app.json();
+    if (R.traefik && R.traefik.ok) state.traefik = await R.traefik.json();
+    if (R.ev) state.appEvents = R.ev.ok ? await R.ev.json() : { error: true };
+    if (R.logs) state.logs = R.logs.ok ? await R.logs.json() : { error: true };
+    if (R.events) state.events = R.events.ok ? await R.events.json() : { error: true };
     renderHeader();
     render();
   } catch (e) { /* keep last view */ }
+}
+function gather(pairs) {
+  return Promise.all(pairs.map(async ([k, p]) => [k, await p.catch(() => null)])).then(Object.fromEntries);
+}
+function is401(R) { return Object.values(R).some(r => r && r.status === 401); }
+function loginOut() { setPoll(0); showLogin(); }
+function logsQuery() {
+  const c = state.logsCtl, p = new URLSearchParams();
+  if (c.container) p.set("container", c.container);
+  if (c.tail) p.set("tail", c.tail);
+  const s = p.toString();
+  return s ? "?" + s : "";
+}
+function eventsQuery() {
+  const f = state.eventsFilter, p = new URLSearchParams();
+  if (f.ns) p.set("ns", f.ns);
+  if (f.type) p.set("type", f.type);
+  if (f.kind) p.set("kind", f.kind);
+  if (f.q) p.set("q", f.q);
+  const s = p.toString();
+  return s ? "?" + s : "";
 }
 
 /* ---------- header ---------- */
@@ -463,12 +550,84 @@ function renderApp(v) {
     </div>
     <span class="grow"></span>
     ${d.publicUrl ? `<a class="puburl" href="${esc(d.publicUrl)}" target="_blank" rel="noopener">${esc(d.publicUrl.replace(/^https?:\/\//, ""))} ${icon("ext", 14, "#35d0c0")}</a>` : ""}
-    <div class="tabs"><span class="on">Graph</span><span>Events</span><span>Logs</span></div>
+    <div class="tabs">${["graph", "events", "logs"].map(t => `<button class="tab${state.appTab === t ? " on" : ""}" data-tab="${t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join("")}</div>
   </div>`;
 
-  v.innerHTML = band + `<div class="appmain"><div id="graphwrap">${appGraphHTML(d)}</div>${appRailHTML(d)}</div>`;
+  let body;
+  if (state.appTab === "events") body = `<div id="appbody" class="pane">${appEventsHTML()}</div>`;
+  else if (state.appTab === "logs") body = `<div id="appbody" class="pane">${appLogsHTML()}</div>`;
+  else body = `<div id="graphwrap">${appGraphHTML(d)}</div>`;
+
+  v.innerHTML = band + `<div class="appmain">${body}${appRailHTML(d)}</div>`;
   wireApp(d);
-  requestAnimationFrame(drawAppEdges);
+  if (state.appTab === "graph") requestAnimationFrame(drawAppEdges);
+}
+
+function setAppTab(t) {
+  if (state.appTab === t) return;
+  state.appTab = t;
+  if (t === "events") state.appEvents = null;
+  if (t === "logs") state.logs = null;
+  render();
+  refresh();
+}
+
+/* ---------- app-detail: events + logs tabs ---------- */
+function appEventsHTML() {
+  const e = state.appEvents;
+  if (!e) return `<div class="warn">loading events…</div>`;
+  if (e.error) return errBox("Events unavailable", "The console may lack the events read grant (core events: get, list), or the API returned an error.");
+  if (!e.events || !e.events.length) return emptyBox("No recent events", `${e.window || ""} Nothing recorded for this app's workloads right now.`);
+  return `<div class="evpane">${eventsListHTML(e.events, { showNs: false })}<div class="evfoot">${esc(e.window || "")}</div></div>`;
+}
+
+function appLogsHTML() {
+  const l = state.logs;
+  const picker = (l && l.containers && l.containers.length > 1)
+    ? `<label class="lc">container <select id="logcontainer">${l.containers.map(c => `<option ${l.container === c ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></label>` : "";
+  const tailSel = `<label class="lc">tail <select id="logtail">${[200, 500, 1000, 2000, 5000].map(n => `<option ${state.logsCtl.tail === n ? "selected" : ""}>${n}</option>`).join("")}</select></label>`;
+  const podLabel = l && l.pod ? `<span class="logpod mono">${esc(l.pod)}${l.container ? " · " + esc(l.container) : ""}</span>` : "";
+  const ctl = `<div class="logctl">${picker}${tailSel}<button class="lbtn" id="logrefresh">Refresh</button><span class="grow"></span>${podLabel}</div>`;
+  let box;
+  if (!l) box = `<div class="warn">loading logs…</div>`;
+  else if (l.error) box = errBox("Logs unavailable", "The console may lack the pod-log read grant (core pods/log: get), or the pod has no logs yet.");
+  else if (!l.lines || !l.lines.length) box = `<div class="logbox empty mono">— ${esc(l.note || "no log lines")} —</div>`;
+  else box = `<pre class="logbox mono" id="logbox">${l.lines.map(logLineHTML).join("\n")}</pre>`;
+  return `<div class="logwrap">${ctl}${box}</div>`;
+}
+function logLineHTML(line) {
+  const low = line.toLowerCase();
+  const cls = /(?:^|[^a-z])(error|fatal|panic|fail|exception|"level":"error")/.test(low) ? "lg-err"
+    : /(?:^|[^a-z])(warn)/.test(low) ? "lg-warn" : "";
+  return `<span class="lgl ${cls}">${esc(line)}</span>`;
+}
+
+/* shared events list (per-app + combined browser) */
+function eventsListHTML(events, opts = {}) {
+  return `<div class="evlist">` + events.map(ev => {
+    const warn = ev.type === "Warning";
+    return `<div class="evrow${warn ? " warn" : ""}">
+      <div class="evtype ${warn ? "w" : "n"}"><span class="dot ${warn ? "s-progressing" : "s-ok"}"></span>${esc(ev.type)}</div>
+      <div class="evbody">
+        <div class="evtop">
+          <span class="evreason">${esc(ev.reason)}</span>
+          <span class="evobj mono">${esc(ev.involvedKind)}/${esc(ev.involvedName)}</span>
+          ${opts.showNs ? `<span class="evns mono">ns ${esc(ev.namespace)}</span>` : ""}
+          <span class="grow"></span>
+          <span class="evage mono">${esc(ev.lastSeen || "")}</span>
+        </div>
+        ${ev.message ? `<div class="evmsg">${esc(ev.message)}</div>` : ""}
+        <div class="evmeta mono">${ev.count > 1 ? `×${ev.count}` : "once"}${ev.component ? " · " + esc(ev.component) : ""}${ev.firstSeen && ev.firstSeen !== ev.lastSeen ? " · first " + esc(ev.firstSeen) : ""}</div>
+      </div>
+    </div>`;
+  }).join("") + `</div>`;
+}
+
+function emptyBox(title, msg) {
+  return `<div class="stub"><div class="box">${icon("clock", 26, "#616b7a")}<h3>${esc(title)}</h3><p>${esc(msg)}</p></div></div>`;
+}
+function errBox(title, msg) {
+  return `<div class="stub"><div class="box">${icon("clock", 26, "#f0b429")}<h3>${esc(title)}</h3><p>${esc(msg)}</p></div></div>`;
 }
 
 function gnode(gid, kind, kindLabel, name, sub, extra = "") {
@@ -573,8 +732,8 @@ function appRailHTML(d) {
     </div>
 
     <div class="railbtns">
-      <button class="rb" disabled>${icon("clock", 14)} View logs</button>
-      <button class="rb" disabled>Events</button>
+      <button class="rb" data-tab="logs">${icon("clock", 14)} View logs</button>
+      <button class="rb" data-tab="events">Events</button>
     </div>
   </div>`;
 }
@@ -587,7 +746,19 @@ function spark(frac, color) {
 }
 
 function wireApp(d) {
-  $$(".appband .tabs span:not(.on)").forEach(s => s.title = "not yet available");
+  $$(".appband .tab").forEach(b => b.onclick = () => setAppTab(b.dataset.tab));
+  $$(".railbtns .rb").forEach(b => b.onclick = () => setAppTab(b.dataset.tab));
+  if (state.appTab === "logs") wireLogs();
+}
+function wireLogs() {
+  const c = $("#logcontainer");
+  if (c) c.onchange = () => { state.logsCtl.container = c.value; state.logs = null; render(); refresh(); };
+  const t = $("#logtail");
+  if (t) t.onchange = () => { state.logsCtl.tail = +t.value; state.logs = null; render(); refresh(); };
+  const rb = $("#logrefresh");
+  if (rb) rb.onclick = () => refresh();
+  const box = $("#logbox");
+  if (box) box.scrollTop = box.scrollHeight; // tail: keep newest in view
 }
 
 /* app graph edges: computed from DOM node rects */
@@ -669,15 +840,47 @@ function ring(pct, color) {
   return `<svg width="76" height="76" viewBox="0 0 76 76"><circle cx="38" cy="38" r="30" fill="none" stroke="#1b2028" stroke-width="8"/>
     <circle cx="38" cy="38" r="30" fill="none" stroke="${color}" stroke-width="8" stroke-linecap="round" stroke-dasharray="${dash} ${c}" transform="rotate(-90 38 38)"/></svg>`;
 }
+function relClock(ts) {
+  if (!ts) return "—";
+  const t = new Date(ts).getTime();
+  if (isNaN(t)) return "—";
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+  return s < 60 ? s + "s ago" : Math.floor(s / 60) + "m ago";
+}
+const metricSort = {
+  mem: (a, b) => b.memBytes - a.memBytes,
+  cpu: (a, b) => b.cpuMilli - a.cpuMilli,
+  name: (a, b) => String(a.name).localeCompare(String(b.name)),
+};
 function renderMetrics(v) {
   const m = state.metrics || {}, node = m.node || {}, g = state.graph || {}, c = g.cluster || {};
+  const mc = state.metricsCtl;
   const kusts = (c.gitops && c.gitops.kustomizations) || (g.nodes || []).filter(n => n.kind === "kustomization").map(n => ({ name: n.name, ready: n.status }));
-  const maxMem = Math.max(1, ...(m.namespaces || []).map(n => n.memBytes));
-  const maxPod = Math.max(1, ...(m.pods || []).map(p => p.memBytes));
-  const nsBars = (m.namespaces || []).map(n => `<div class="mrow"><div class="lab"><span>${esc(n.name)}</span><span class="mono">${fmtMem(n.memBytes)} · ${n.pods}p</span></div><div class="barbg"><div class="barfill" style="width:${(n.memBytes / maxMem * 100).toFixed(0)}%"></div></div></div>`).join("");
-  const podBars = (m.pods || []).map(p => `<div class="mrow"><div class="lab"><span class="mono">${esc(p.name)}</span><span class="mono">${fmtMem(p.memBytes)}</span></div><div class="barbg"><div class="barfill" style="width:${(p.memBytes / maxPod * 100).toFixed(0)}%;background:var(--info)"></div></div></div>`).join("");
+  const cmp = metricSort[mc.sort] || metricSort.mem;
+  let nsList = (m.namespaces || []).slice();
+  let podList = (m.pods || []).slice();
+  if (mc.ns) { nsList = nsList.filter(n => n.name === mc.ns); podList = podList.filter(p => p.namespace === mc.ns); }
+  nsList.sort(cmp);
+  podList.sort(cmp);
+  podList = podList.slice(0, 12);
+  // bars represent the sorted metric (cpu when sorting by cpu, else memory)
+  const barKey = mc.sort === "cpu" ? "cpuMilli" : "memBytes";
+  const maxMem = Math.max(1, ...nsList.map(n => n[barKey]));
+  const maxPod = Math.max(1, ...podList.map(p => p[barKey]));
+  const nsNames = (m.namespaces || []).map(n => n.name);
+  const toolbar = `<div class="mtoolbar">
+    <select id="mns" title="Namespace"><option value="">all namespaces</option>${nsNames.map(n => `<option ${mc.ns === n ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
+    <div class="seg" id="msort" role="group" aria-label="Sort by">${[["mem", "memory"], ["cpu", "cpu"], ["name", "name"]].map(([val, lab]) => `<button data-sort="${val}" class="${mc.sort === val ? "on" : ""}">${lab}</button>`).join("")}</div>
+    <label class="lc">refresh <select id="mrefresh">${[["5000", "5s"], ["15000", "15s"], ["30000", "30s"], ["0", "paused"]].map(([val, lab]) => `<option value="${val}" ${mc.interval === +val ? "selected" : ""}>${lab}</option>`).join("")}</select></label>
+    <span class="grow"></span>
+    <span class="mono mupd">updated ${relClock(m.updatedAt)}</span>
+  </div>`;
+  const nsBars = nsList.map(n => `<div class="mrow"><div class="lab"><span>${esc(n.name)}</span><span class="mono">${fmtMem(n.memBytes)} · ${n.cpuMilli || 0}m · ${n.pods}p</span></div><div class="barbg"><div class="barfill" style="width:${(n[barKey] / maxMem * 100).toFixed(0)}%"></div></div></div>`).join("");
+  const podBars = podList.map(p => `<div class="mrow"><div class="lab"><span class="mono">${esc(p.name)}</span><span class="mono">${fmtMem(p.memBytes)} · ${p.cpuMilli || 0}m</span></div><div class="barbg"><div class="barfill" style="width:${(p[barKey] / maxPod * 100).toFixed(0)}%;background:var(--info)"></div></div></div>`).join("");
   const recon = kusts.map(k => `<div class="kv"><span class="mono" style="display:flex;align-items:center;gap:8px"><span class="dot s-${k.ready}"></span>${esc(k.name)}</span><span class="mono" style="color:var(--mut)">${esc(k.ready)}${k.reconciledAt ? " · " + esc(k.reconciledAt) : ""}</span></div>`).join("");
-  v.innerHTML = (m.available ? "" : `<div class="warn">metrics-server unavailable — node/pod usage hidden.</div>`) + `<div class="grid">
+  const podTitle = mc.sort === "cpu" ? "Top pods · cpu" : mc.sort === "name" ? "Pods · by name" : "Top pods · memory";
+  const nsTitle = mc.sort === "cpu" ? "CPU by namespace" : mc.sort === "name" ? "Namespaces · by name" : "Memory by namespace";
+  v.innerHTML = toolbar + (m.available ? "" : `<div class="warn">metrics-server unavailable — node/pod usage hidden.</div>`) + `<div class="grid">
     <div class="mcard gauge">${ring(node.cpuPct || 0, "#35d0c0")}<div><div class="h">Node CPU</div><div class="big">${node.cpuPct != null ? node.cpuPct + "%" : "—"}</div><div class="mono" style="font-size:11px;color:var(--mut)">${node.cpuMilli || 0}m / ${node.cpuCap || 0}m</div></div></div>
     <div class="mcard gauge">${ring(node.memPct || 0, "#35d0c0")}<div><div class="h">Node memory</div><div class="big">${node.memPct != null ? node.memPct + "%" : "—"}</div><div class="mono" style="font-size:11px;color:var(--mut)">${fmtMem(node.memBytes || 0)} / ${fmtMem(node.memCap || 0)}</div></div></div>
     <div class="mcard gauge">${ring(100, "#57d39a")}<div><div class="h">Pods running</div><div class="big">${m.podsReady || c.podsReady || 0}</div><div class="mono" style="font-size:11px;color:var(--ok)">${m.podsReady || 0} ready · ${m.podsTotal || 0} total</div></div></div>
@@ -686,10 +889,18 @@ function renderMetrics(v) {
       <div class="kv"><span class="k2">Namespaces</span><span class="mono">${c.namespaces || 0}</span></div>
       <div class="kv"><span class="k2">Apps</span><span class="mono">${c.apps || 0}</span></div>
       <div class="kv"><span class="k2">Flux</span><span class="mono" style="color:${c.fluxReady ? "var(--ok)" : "var(--warn)"}">${esc(c.fluxMsg || "")}</span></div></div>
-    <div class="mcard wide"><div class="h">Memory by namespace</div><div style="margin-top:14px">${nsBars || '<div class="mono" style="color:var(--mut)">—</div>'}</div></div>
-    <div class="mcard wide"><div class="h">Top pods · memory</div><div style="margin-top:14px">${podBars || '<div class="mono" style="color:var(--mut)">—</div>'}</div></div>
+    <div class="mcard wide"><div class="h">${esc(nsTitle)}</div><div style="margin-top:14px">${nsBars || '<div class="mono" style="color:var(--mut)">—</div>'}</div></div>
+    <div class="mcard wide"><div class="h">${esc(podTitle)}</div><div style="margin-top:14px">${podBars || '<div class="mono" style="color:var(--mut)">—</div>'}</div></div>
     <div class="mcard wide"><div class="h">GitOps reconciliation</div><div style="margin-top:8px">${recon || '<div class="mono" style="color:var(--mut)">—</div>'}</div></div>
   </div>`;
+  wireMetrics();
+}
+function wireMetrics() {
+  const ns = $("#mns");
+  if (ns) ns.onchange = () => { state.metricsCtl.ns = ns.value; render(); };
+  $$("#msort button").forEach(b => b.onclick = () => { state.metricsCtl.sort = b.dataset.sort; render(); });
+  const rf = $("#mrefresh");
+  if (rf) rf.onchange = () => { state.metricsCtl.interval = +rf.value; setPoll(+rf.value); };
 }
 
 /* ---------- TRAEFIK (routing page) ---------- */
@@ -767,11 +978,46 @@ function drawTraefikEdges() {
   svg.innerHTML = `<defs><marker id="tf-ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M2 2 8 5 2 8" fill="none" stroke="#35d0c0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>` + paths;
 }
 
-/* ---------- EVENTS (placeholder) ---------- */
+/* ---------- EVENTS (combined browser) ---------- */
+let evTimer = null;
 function renderEvents(v) {
-  v.innerHTML = `<div class="empty"><div class="box">
-    ${icon("clock", 30, "#616b7a")}
-    <h3>Events stream</h3>
-    <p>Kubernetes events and Flux reconciliation history aren't wired into the console yet. For now, per-app status and reconcile times live on each app's page, and GitOps reconciliation is on the Metrics tab.</p>
-  </div></div>`;
+  const e = state.events, f = state.eventsFilter;
+  const nss = (e && e.namespaces) || [];
+  const nsOpts = [`<option value="">all namespaces</option>`]
+    .concat(nss.map(n => `<option ${f.ns === n ? "selected" : ""}>${esc(n)}</option>`)).join("");
+  const kinds = ["", "Pod", "Deployment", "ReplicaSet", "Service", "IngressRoute", "HelmRelease", "HelmChart", "Kustomization", "GitRepository", "ImageRepository", "ImagePolicy"];
+  const kindOpts = kinds.map(k => `<option value="${esc(k)}" ${f.kind === k ? "selected" : ""}>${k || "any kind"}</option>`).join("");
+  const typeSeg = ["", "Normal", "Warning"].map(t => `<button data-type="${t}" class="${f.type === t ? "on" : ""}">${t || "all"}</button>`).join("");
+  const count = e && !e.error ? `${e.capped ? e.events.length + " of " + e.total : e.total} events` : "";
+  const toolbar = `<div class="evtoolbar">
+    <select id="evns" title="Namespace">${nsOpts}</select>
+    <div class="seg" id="evtype" role="group" aria-label="Event type">${typeSeg}</div>
+    <select id="evkind" title="Involved object kind">${kindOpts}</select>
+    <input id="evq" type="search" placeholder="search reason / message / object" value="${esc(f.q)}">
+    <span class="grow"></span>
+    <span class="evcount mono">${count}</span>
+  </div>`;
+  let list;
+  if (!e) list = `<div class="warn">loading events…</div>`;
+  else if (e.error) list = errBox("Events unavailable", "The console may lack the events read grant (core events: get, list).");
+  else if (!e.events.length) list = emptyBox("No matching events", e.window || "");
+  else list = `<div class="evscroll">${eventsListHTML(e.events, { showNs: true })}</div>`;
+  // preserve the search caret across a poll re-render while the user is typing
+  const active = document.activeElement;
+  const keepFocus = active && active.id === "evq";
+  const caret = keepFocus ? active.selectionStart : null;
+  v.innerHTML = `<div class="evpage">${toolbar}${list}<div class="evfoot">${e && !e.error ? esc(e.window || "") : ""}${e && e.capped ? " · list capped — narrow with filters" : ""}</div></div>`;
+  wireEvents(keepFocus, caret);
+}
+function wireEvents(keepFocus, caret) {
+  const ns = $("#evns");
+  if (ns) ns.onchange = () => { state.eventsFilter.ns = ns.value; render(); refresh(); };
+  const kind = $("#evkind");
+  if (kind) kind.onchange = () => { state.eventsFilter.kind = kind.value; render(); refresh(); };
+  $$("#evtype button").forEach(b => b.onclick = () => { state.eventsFilter.type = b.dataset.type; render(); refresh(); });
+  const q = $("#evq");
+  if (q) {
+    q.oninput = () => { state.eventsFilter.q = q.value; clearTimeout(evTimer); evTimer = setTimeout(refresh, 300); };
+    if (keepFocus) { q.focus(); const n = caret == null ? q.value.length : caret; q.setSelectionRange(n, n); }
+  }
 }

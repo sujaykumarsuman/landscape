@@ -100,6 +100,13 @@ function renderMap(v) {
   const c = g.cluster || {};
   const byLayer = { source: [], build: [], gitops: [], cluster: [] };
   g.nodes.forEach(n => (byLayer[n.layer] || byLayer.cluster).push(n));
+  // order each lane so an app's chain (repo → image → helmRelease → app) lines
+  // up on the same row across lanes; shared/infra nodes sink to the bottom.
+  const appRank = {};
+  g.nodes.filter(n => n.kind === "app").forEach((n, i) => { appRank[n.app] = i; });
+  const rank = n => (n.app && appRank[n.app] != null) ? appRank[n.app] : 99;
+  Object.values(byLayer).forEach(a => a.sort((x, y) =>
+    rank(x) - rank(y) || String(x.kind).localeCompare(y.kind) || x.name.localeCompare(y.name)));
 
   const ribbon = `<div class="ribbon">
     <span class="chip mono"><span class="dot s-ok"></span>${esc(c.version || "k3s")} · ${esc(c.node || "")}</span>
@@ -133,10 +140,11 @@ function clusterCol(nodes) {
   });
   let html = `<div class="col">`;
   html += others.map(nodeHTML).join("");
+  html += `<div class="nsgrid">`;
   Object.keys(groups).sort().forEach(ns => {
     html += `<div class="nsgroup"><div class="nsh"><span>ns · ${esc(ns)}</span></div>` + groups[ns].map(nodeHTML).join("") + `</div>`;
   });
-  html += `</div>`;
+  html += `</div></div>`;
   return html;
 }
 
@@ -177,7 +185,8 @@ function drawEdges() {
     const a = pos[e.from], b = pos[e.to]; if (!a || !b) return;
     const fx = a.x + a.w, fy = a.y + a.h / 2, tx = b.x, ty = b.y + b.h / 2;
     const dash = e.kind === "watch" ? `stroke-dasharray="5 4"` : "";
-    paths += `<path d="M ${fx} ${fy} C ${fx + 44} ${fy}, ${tx - 44} ${ty}, ${tx} ${ty}" fill="none" stroke="${edgeColor(e.kind)}" stroke-width="1.5" ${dash} data-from="${esc(e.from)}" data-to="${esc(e.to)}" opacity="0.9"/>`;
+    const cx = Math.min(60, Math.max(24, (tx - fx) / 2));
+    paths += `<path d="M ${fx} ${fy} C ${fx + cx} ${fy}, ${tx - cx} ${ty}, ${tx} ${ty}" fill="none" stroke="${edgeColor(e.kind)}" stroke-width="1.5" ${dash} data-from="${esc(e.from)}" data-to="${esc(e.to)}"/>`;
   });
   svg.innerHTML = paths;
 }
@@ -211,14 +220,14 @@ function highlight(id, el, node) {
   document.querySelectorAll("#mapwrap .node").forEach(n => n.classList.toggle("dim", !set.has(n.dataset.id)));
   document.querySelectorAll("#edges path").forEach(p => {
     const on = set.has(p.dataset.from) && set.has(p.dataset.to);
+    p.classList.toggle("hot", on);
     p.classList.toggle("dim", !on);
-    if (on) p.setAttribute("stroke-width", "2.2"); else p.setAttribute("stroke-width", "1.5");
   });
   showHoverCard(el, node);
 }
 function clearHighlight() {
-  document.querySelectorAll("#mapwrap .node,.dim").forEach(n => n.classList.remove("dim"));
-  document.querySelectorAll("#edges path").forEach(p => { p.classList.remove("dim"); p.setAttribute("stroke-width", "1.5"); });
+  document.querySelectorAll("#mapwrap .node.dim").forEach(n => n.classList.remove("dim"));
+  document.querySelectorAll("#edges path").forEach(p => p.classList.remove("hot", "dim"));
   $("#hover").classList.add("hide");
 }
 function chipHTML(l) {

@@ -48,10 +48,14 @@ button{font-family:var(--sans)}
 /* map */
 #mapwrap{position:relative}
 #edges{position:absolute;inset:0;pointer-events:none;z-index:0}
+#edges path{opacity:.2;transition:opacity .15s,stroke-width .15s}
+#edges path.hot{opacity:1;stroke-width:2.2}
+#edges path.dim{opacity:.04}
 .lanes{position:relative;display:grid;grid-template-columns:250px 210px 250px 1fr;gap:46px;padding:20px 18px 40px;z-index:1}
 .lane .lh{display:flex;align-items:center;gap:8px;font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:var(--dim);margin-bottom:10px}
 .col{display:flex;flex-direction:column;gap:10px}
 .nsgroup{border:1px dashed var(--line2);border-radius:10px;padding:9px;display:flex;flex-direction:column;gap:8px}
+.nsgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
 .nsgroup .nsh{font-size:10px;letter-spacing:.4px;text-transform:uppercase;color:var(--mut);display:flex;justify-content:space-between}
 .node{position:relative;background:var(--panel2);border:1px solid var(--line2);border-radius:9px;padding:9px 11px;cursor:default;transition:opacity .15s,border-color .15s}
 .node.owner{}
@@ -60,7 +64,7 @@ button{font-family:var(--sans)}
 .node .k{font-size:9.5px;letter-spacing:.4px;text-transform:uppercase;color:var(--mut);display:flex;align-items:center;gap:5px}
 .node .nm{font-size:12.5px;margin-top:3px}
 .node .nm.mono{font-family:var(--mono);font-size:12px}
-.node .st{font-size:10.5px;color:var(--mut);margin-top:3px;font-family:var(--mono)}
+.node .st{font-size:10.5px;color:var(--mut);margin-top:3px;font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 .node.hl{border-color:var(--teal);box-shadow:0 0 0 1px rgba(53,208,192,.4)}
 
 /* hover card */

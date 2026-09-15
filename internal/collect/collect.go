@@ -177,10 +177,10 @@ func (co *Collector) Graph(ctx context.Context) (*model.Graph, error) {
 				appNode.Meta["route"] = r
 			}
 			// source + image + build nodes
-			add(model.Node{ID: "repo/" + img.Repo, Kind: "repo", Name: img.Owner + "/" + img.Repo, Layer: model.LayerSource, Owner: true,
+			add(model.Node{ID: "repo/" + img.Repo, Kind: "repo", Name: img.Owner + "/" + img.Repo, Layer: model.LayerSource, App: name, Owner: true,
 				Status: "ok", Summary: "Application source.",
 				Links: []model.Link{{Type: "source", URL: "https://github.com/" + img.Owner + "/" + img.Repo, Label: img.Owner + "/" + img.Repo}}})
-			add(model.Node{ID: "image/" + img.Repo, Kind: "image", Name: img.Repo + ":" + tag, Namespace: "ghcr.io", Layer: model.LayerBuild, Owner: true,
+			add(model.Node{ID: "image/" + img.Repo, Kind: "image", Name: img.Repo + ":" + tag, Namespace: "ghcr.io", Layer: model.LayerBuild, App: name, Owner: true,
 				Status: "ok", Summary: "Container image on GHCR (public).",
 				Links: []model.Link{{Type: "image", URL: "https://github.com/" + img.Owner + "/" + img.Repo + "/pkgs/container/" + img.Repo, Label: "ghcr · " + img.Repo}}})
 			edge("repo/"+img.Repo, "actions", "flow", name)

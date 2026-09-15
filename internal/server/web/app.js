@@ -293,6 +293,13 @@ function render() {
 }
 function loading() { return `<div class="warn">loading cluster…</div>`; }
 
+/* one-line hover descriptions for platform namespaces (not graph nodes) */
+const platDesc = {
+  "kube-system": "Kubernetes system components — Traefik ingress, CoreDNS, metrics-server and local-path storage.",
+  "flux-system": "Flux CD — the source, kustomize, helm, notification and image controllers that reconcile the cluster.",
+  "cert-manager": "Issues and renews the Let's Encrypt TLS certificate (cert-manager, webhook, cainjector).",
+};
+
 /* ---------- MAP (boxed landscape) ---------- */
 function renderMap(v) {
   const g = state.graph, c = g.cluster || {}, go = c.gitops || {};
@@ -338,7 +345,7 @@ function renderMap(v) {
       <div class="mono img-name" style="font-size:11px;color:var(--teal);margin-top:2px">:${esc(tag || "")}</div></div>`;
   }).join("");
   const buildInner = `
-    <div class="card">
+    <div class="card hoverable" data-id="actions">
       <div class="kind">GitHub Actions</div>
       <div style="font-size:13px;margin-top:3px">build-push</div>
       <div class="sub">on tag vX.Y.Z / push</div>
@@ -351,13 +358,13 @@ function renderMap(v) {
   const ctrls = (go.controllers && go.controllers.length ? go.controllers
     : ["source", "kustomize", "helm", "notification", "image-reflector", "image-automation"]);
   const ctrlChips = ctrls.map(x => `<span class="chip sm">${esc(x)}</span>`).join("");
-  const kusts = (go.kustomizations || []).map(k => `<div class="kr">
+  const kusts = (go.kustomizations || []).map(k => `<div class="kr hoverable" data-id="kust/${esc(k.name)}">
       <span class="dot s-${k.ready}"></span><span class="mono">${esc(k.name)}</span>
       ${k.reconciledAt ? `<span class="ago">${esc(k.reconciledAt)}</span>` : ""}
       ${k.url ? `<a class="krlink" href="${esc(k.url)}" target="_blank" rel="noopener" title="${esc(k.path || "repo folder")}" onclick="event.stopPropagation()">${icon("ext", 11)}</a>` : ""}
     </div>`).join("");
   const gitopsInner = `
-    <div class="card"><div class="kind">controllers</div><div class="ctrls">${ctrlChips}</div></div>
+    <div class="card hoverable" data-id="flux"><div class="kind">controllers</div><div class="ctrls">${ctrlChips}</div></div>
     <div class="card"><div class="kind">kustomizations</div><div class="kustlist">${kusts || '<span class="mono" style="color:var(--mut);font-size:11px">—</span>'}</div></div>
     <div class="card accent-violet flowall">
       <div class="row1">${icon("flux", 14, "#9b8cf0")}<span style="font-size:12.5px;color:#c7bdf7">image-automation</span></div>
@@ -375,9 +382,14 @@ function renderMap(v) {
       <div class="nsh"><span class="kind" style="color:var(--dim)">ns · ${esc(ns.name)}</span><span class="rdy">● Ready</span></div>
       ${cardsH}</div>`;
   }).join("");
-  const platCards = nsPlat.map(ns => `<div class="card">
+  const platCards = nsPlat.map(ns => {
+    const hid = "plns/" + ns.name;
+    byId[hid] = { name: ns.name, owner: false,
+      summary: platDesc[ns.name] || ("Platform namespace." + (ns.note ? " " + ns.note : "")) };
+    return `<div class="card hoverable" data-id="${esc(hid)}">
       <div class="pn">${esc(ns.name)}</div>
-      <div class="ps">${esc(ns.note || (ns.pods + " pods"))}</div></div>`).join("");
+      <div class="ps">${esc(ns.note || (ns.pods + " pods"))}</div></div>`;
+  }).join("");
   const cap = [c.nodeCpu, c.nodeMem, c.diskFree].filter(Boolean).join(" · ");
   const lane4 = `<div class="lane cluster">
     <div class="lanehdr"><span style="display:flex;align-items:center;gap:8px">${icon("cluster", 14, "#9aa4b2")} Cluster · k3s @ ${esc(c.node || "node")}</span>${cap ? `<span class="cap">${esc(cap)}</span>` : ""}</div>

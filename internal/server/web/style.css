@@ -146,13 +146,14 @@ button{font-family:var(--sans)}
 #hover{position:fixed;z-index:50;width:320px;background:#0f1420;border:1px solid rgba(53,208,192,.5);border-radius:12px;
   box-shadow:0 22px 60px rgba(0,0,0,.6);padding:14px 15px;pointer-events:auto}
 #hover .ttl{display:flex;align-items:center;justify-content:space-between;gap:10px}
-#hover .name{font-weight:600;font-size:14.5px;font-family:var(--mono)}
-#hover .badge{font-size:9.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--mut);white-space:nowrap}
+#hover .name{font-weight:600;font-size:14.5px;font-family:var(--mono);min-width:0;overflow-wrap:anywhere}
+#hover .badge{font-size:9.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--mut);white-space:nowrap;flex:none}
 #hover .sub{font-family:var(--mono);font-size:11px;color:var(--dim);margin-top:5px}
 #hover .expl{font-size:11.5px;color:var(--dim);line-height:1.5;margin-top:10px}
 #hover .chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
 .linkchip{display:inline-flex;align-items:center;gap:5px;height:27px;padding:0 10px;border-radius:7px;background:#141b26;border:1px solid var(--line2);font-size:11.5px;color:var(--text);cursor:pointer}
 .linkchip:hover{border-color:var(--teal);color:var(--teal)}
+.hoverable{cursor:help}
 
 /* ---------- app detail page ---------- */
 .appband{display:flex;align-items:center;gap:16px;min-height:74px;padding:12px 24px;border-bottom:1px solid var(--line);background:#0b0e13;flex-wrap:wrap}

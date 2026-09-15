@@ -80,6 +80,18 @@ func TestGhLinksProjectsHub(t *testing.T) {
 	}
 }
 
+func TestSourceLink(t *testing.T) {
+	cases := []struct{ image, url string }{
+		{"ghcr.io/sujaykumarsuman/airlift:1.0.1", "https://github.com/sujaykumarsuman/airlift"},
+		{"ghcr.io/sujaykumarsuman/projects-hub:0.1.1", "https://github.com/sujaykumarsuman/sujaykumarsuman.github.io/tree/main/projects"},
+	}
+	for _, c := range cases {
+		if got := sourceLink(parseImage(c.image)); got.URL != c.url {
+			t.Errorf("sourceLink(%q).URL = %q, want %q", c.image, got.URL, c.url)
+		}
+	}
+}
+
 func TestExtractPathPrefix(t *testing.T) {
 	got := extractPathPrefix("Host(`projects.sujaykumar.dev`) && PathPrefix(`/airlift`)")
 	if got != "/airlift" {

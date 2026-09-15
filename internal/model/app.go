@@ -98,6 +98,8 @@ type KustDetail struct {
 	Name         string `json:"name"`
 	Ready        string `json:"ready"`
 	ReconciledAt string `json:"reconciledAt,omitempty"`
+	Path         string `json:"path,omitempty"` // the folder it applies, e.g. "apps"
+	URL          string `json:"url,omitempty"`  // deep-link to that folder on GitHub
 }
 
 // NsSummary is one namespace's roll-up for the cluster box.

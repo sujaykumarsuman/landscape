@@ -53,7 +53,7 @@ button{font-family:var(--sans)}
 .iconbtn:hover{color:var(--text);background:#161b23}
 
 /* ---------- view frame ---------- */
-#view{position:relative;height:calc(100vh - 56px);overflow:auto}
+#view{position:relative;height:calc(100vh - 56px);overflow-y:auto;overflow-x:hidden}
 .ribbon{display:flex;align-items:center;gap:9px;min-height:44px;padding:7px 20px;border-bottom:1px solid var(--line);background:#0b0e13;flex-wrap:wrap}
 .ribbon .flow{font-size:12px;color:var(--mut)}
 .card{background:var(--panel2);border:1px solid var(--line2);border-radius:9px;padding:10px 11px}
@@ -62,9 +62,11 @@ button{font-family:var(--sans)}
 .chip.xs{height:19px;font-size:10px;padding:0 7px}
 
 /* ---------- map: lanes ---------- */
-.map{display:flex;align-items:stretch;padding:20px;gap:0;min-width:min-content}
-.lane{flex:1 1 0;min-width:230px;border:1px solid var(--line);border-radius:12px;background:rgba(18,21,28,.55);display:flex;flex-direction:column}
-.lane.cluster{flex:1.9 1 0;min-width:440px}
+/* lanes shrink to fit any width (min-width:0) so the page never scrolls
+   horizontally; below 1080px they stack (see media query) */
+.map{display:flex;align-items:stretch;padding:20px;gap:0;max-width:100%}
+.lane{flex:1 1 0;min-width:0;border:1px solid var(--line);border-radius:12px;background:rgba(18,21,28,.55);display:flex;flex-direction:column}
+.lane.cluster{flex:1.9 1 0;min-width:0}
 .lanehdr{display:flex;align-items:center;gap:8px;padding:10px 12px;font-size:11px;letter-spacing:.6px;
   text-transform:uppercase;color:var(--dim);border-bottom:1px solid var(--line)}
 .lanehdr .cap{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--mut);text-transform:none;letter-spacing:0}
@@ -73,6 +75,7 @@ button{font-family:var(--sans)}
 .card .nm{font-size:12.5px}
 .card .nm.mono{font-family:var(--mono)}
 .card .sub{font-family:var(--mono);font-size:11px;color:var(--mut);margin-top:3px}
+.card .img-name{overflow-wrap:anywhere}
 .card.appflow{cursor:pointer;transition:border-color .14s,opacity .14s}
 .card.accent-teal{border-color:rgba(53,208,192,.45);background:#101a1c}
 .card.accent-violet{border-color:rgba(155,140,240,.4);background:#15131f}
@@ -83,6 +86,13 @@ button{font-family:var(--sans)}
 .kustlist .kr{display:flex;align-items:center;gap:6px}
 .kustlist .kr .mono{font-size:11.5px}
 .kustlist .kr .ago{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--mut)}
+.kustlist .kr .krlink{display:inline-flex;align-items:center;color:var(--mut);padding:1px}
+.kustlist .kr .krlink:hover{color:var(--teal)}
+
+/* image-automation: highlighted + reveals its bubble when a flow is traced */
+.ia-bubble{display:none;margin-top:8px;padding:7px 9px;border-radius:7px;background:rgba(155,140,240,.12);border:1px solid rgba(155,140,240,.4);font-size:10.5px;color:#c7bdf7;line-height:1.5}
+.card.flowall.trace{border-color:var(--violet);box-shadow:0 0 0 1px rgba(155,140,240,.45)}
+.card.flowall.trace .ia-bubble{display:block}
 
 /* lane flow gap */
 .flowgap{flex:none;width:44px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;position:relative}
@@ -257,11 +267,14 @@ button{font-family:var(--sans)}
   .tfgraph{grid-template-columns:1fr;gap:20px}
   .tfsource{position:static}
 }
-@media(max-width:900px){
+/* below 1080px the 4-lane pipeline stacks vertically (full-width lanes read
+   better than four cramped columns); flow arrows rotate to point down */
+@media(max-width:1080px){
   .map{flex-direction:column}
-  .lane,.lane.cluster{min-width:0}
-  .flowgap{width:auto;height:34px;flex-direction:row}
+  .flowgap{width:auto;height:34px;flex-direction:row;align-self:center}
   .flowgap svg{transform:rotate(90deg)}
+}
+@media(max-width:900px){
   .grid{grid-template-columns:repeat(2,minmax(0,1fr))}
   .mcard.wide{grid-column:span 2}
 }

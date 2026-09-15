@@ -11,6 +11,11 @@ let pollTimer = null;
 // window listeners bound once at load (startApp may run again after a re-login)
 window.addEventListener("resize", () => { if (state.view === "app") drawAppEdges(); if (state.view === "traefik") drawTraefikEdges(); });
 window.addEventListener("keydown", (e) => { if (e.key === "Escape" && state.pin) unpin(); });
+// keep the hover card alive while the cursor is over it (so its links are clickable)
+{
+  const hv = document.querySelector("#hover");
+  if (hv) { hv.addEventListener("mouseenter", cancelHide); hv.addEventListener("mouseleave", scheduleHide); }
+}
 
 init();
 async function init() {
@@ -191,8 +196,8 @@ function renderMap(v) {
   const imgCards = images.map(im => {
     const [nm, tag] = String(im.name).split(":");
     return `<div class="card appflow" data-id="${esc(im.id)}" data-app="${esc(im.app || "")}">
-      <div class="mono" style="font-size:11.5px">${esc(nm)}</div>
-      <div class="mono" style="font-size:11px;color:var(--teal);margin-top:2px">:${esc(tag || "")}</div></div>`;
+      <div class="mono img-name" style="font-size:11.5px">${esc(nm)}</div>
+      <div class="mono img-name" style="font-size:11px;color:var(--teal);margin-top:2px">:${esc(tag || "")}</div></div>`;
   }).join("");
   const buildInner = `
     <div class="card">
@@ -208,15 +213,20 @@ function renderMap(v) {
   const ctrls = (go.controllers && go.controllers.length ? go.controllers
     : ["source", "kustomize", "helm", "notification", "image-reflector", "image-automation"]);
   const ctrlChips = ctrls.map(x => `<span class="chip sm">${esc(x)}</span>`).join("");
-  const kusts = (go.kustomizations || []).map(k => `<div class="kr"><span class="dot s-${k.ready}"></span><span class="mono">${esc(k.name)}</span>${k.reconciledAt ? `<span class="ago">${esc(k.reconciledAt)}</span>` : ""}</div>`).join("");
+  const kusts = (go.kustomizations || []).map(k => `<div class="kr">
+      <span class="dot s-${k.ready}"></span><span class="mono">${esc(k.name)}</span>
+      ${k.reconciledAt ? `<span class="ago">${esc(k.reconciledAt)}</span>` : ""}
+      ${k.url ? `<a class="krlink" href="${esc(k.url)}" target="_blank" rel="noopener" title="${esc(k.path || "repo folder")}" onclick="event.stopPropagation()">${icon("ext", 11)}</a>` : ""}
+    </div>`).join("");
   const gitopsInner = `
     <div class="card"><div class="kind">controllers</div><div class="ctrls">${ctrlChips}</div></div>
     <div class="card"><div class="kind">kustomizations</div><div class="kustlist">${kusts || '<span class="mono" style="color:var(--mut);font-size:11px">—</span>'}</div></div>
-    <div class="card accent-violet">
+    <div class="card accent-violet flowall">
       <div class="row1">${icon("flux", 14, "#9b8cf0")}<span style="font-size:12.5px;color:#c7bdf7">image-automation</span></div>
       <div class="mono" style="font-size:10.5px;color:var(--mut);margin-top:4px">watches GHCR → bumps tag → commits</div>
+      <div class="ia-bubble">image-automation writes the bumped tag to infra → Flux deploys the new image</div>
     </div>`;
-  const lane3 = lane("gitops", "GitOps · Flux" + (go.version ? " v" + go.version : ""), gitopsInner);
+  const lane3 = lane("gitops", "GitOps · Flux" + vlabel(go.version), gitopsInner);
 
   /* lane 4: cluster */
   const nsBoxes = nsApps.map(ns => {
@@ -311,11 +321,12 @@ function wireMap(byId) {
     const node = byId[el.dataset.id];
     const app = el.dataset.app;
     el.addEventListener("mouseenter", () => {
+      cancelHide();
       if (state.pin) return;                 // locked: don't re-trace on hover
       if (app) applyTrace(app);
       if (node) showHoverCard(el, node);
     });
-    el.addEventListener("mouseleave", () => { if (!state.pin) clearTrace(); });
+    el.addEventListener("mouseleave", scheduleHide); // grace so the card is reachable
     el.addEventListener("click", (e) => {
       if (e.target.closest(".open") || e.target.closest(".linkchip")) return; // nav / link
       e.stopPropagation();
@@ -338,13 +349,20 @@ function wireMap(byId) {
   if (state.pin) { map.classList.add("pinned"); applyTrace(state.pin); }
 }
 function cssq(s) { return String(s).replace(/"/g, '\\"'); }
+// hover card hide is deferred so the cursor can travel to the card and click its links
+let hoverHideTimer = null;
+function scheduleHide() { clearTimeout(hoverHideTimer); hoverHideTimer = setTimeout(() => { if (!state.pin) clearTrace(); }, 220); }
+function cancelHide() { clearTimeout(hoverHideTimer); }
 function applyTrace(app) {
   const map = $(".map"); if (!map) return;
   map.classList.add("tracing");
   $$(".map .trace").forEach(x => x.classList.remove("trace"));
   $$(`.map [data-app="${cssq(app)}"]`).forEach(x => x.classList.add("trace"));
+  // GitOps steps that apply to every app (image-automation, apps kustomization)
+  $$(".map .flowall").forEach(x => x.classList.add("trace"));
 }
 function pinApp(app) {
+  cancelHide();
   state.pin = app;
   const map = $(".map"); map.classList.add("pinned");
   applyTrace(app);
@@ -504,7 +522,7 @@ function appRailHTML(d) {
     <div class="rsec">Managed by</div>
     <div class="rbox pad managed">
       <div class="ln">${icon("flux", 14, "#35d0c0")}<span class="mono">HelmRelease ${esc(hr ? hr.name : d.name)}</span></div>
-      <div class="msub">${kust ? "Kustomization " + esc(kust.name) : "Kustomization apps"}${hr && hr.chart ? " · chart " + esc(hr.chart) : ""}</div>
+      <div class="msub">Kustomization ${kust && kust.url ? `<a href="${esc(kust.url)}" target="_blank" rel="noopener">${esc(kust.name)} ${icon("ext", 10)}</a>` : esc(kust ? kust.name : "apps")}${hr && hr.chart ? " · chart " + esc(hr.chart) : ""}</div>
       ${auto ? `<div class="mauto">image-automation: ${esc(auto)}</div>` : ""}
     </div>
 
@@ -593,6 +611,7 @@ function anchor(A, B) {
 }
 
 /* ---------- helpers ---------- */
+function vlabel(v) { return v ? " " + (String(v).startsWith("v") ? v : "v" + v) : ""; }
 function shortImage(img) {
   if (!img) return "—";
   const parts = String(img).split("/");
@@ -648,7 +667,7 @@ function renderTraefik(v) {
       <div class="titlerow">
         <h1>Traefik</h1>
         <span class="badge ok"><span class="dot s-ok"></span>ingress</span>
-        ${t.version ? `<span class="ver">v${esc(t.version)}</span>` : ""}
+        ${t.version ? `<span class="ver">${esc(vlabel(t.version).trim())}</span>` : ""}
       </div>
       <div class="meta">${esc(meta || "edge router · path-prefix routing")}</div>
     </div>

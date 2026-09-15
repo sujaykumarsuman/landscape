@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>landscape</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+
+<div id="login" class="hide">
+  <div class="card">
+    <h1>
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#35d0c0" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="12" r="2.2"/><path d="M7.1 7 16.9 11M7.1 17 16.9 13"/></svg>
+      landscape
+    </h1>
+    <div class="sub">projects.sujaykumar.dev</div>
+    <form id="loginform">
+      <input id="pw" type="password" placeholder="Admin password" autocomplete="current-password" autofocus>
+      <button type="submit">Unlock console</button>
+      <div class="err" id="loginerr"></div>
+    </form>
+    <div class="foot">Read-only view of the GitOps landscape — no write access to the cluster.</div>
+  </div>
+</div>
+
+<div id="app" class="hide">
+  <div id="top">
+    <div class="brand">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#35d0c0" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="12" r="2.2"/><path d="M7.1 7 16.9 11M7.1 17 16.9 13"/></svg>
+      landscape
+    </div>
+    <div class="nav">
+      <button data-view="map" class="on">Landscape</button>
+      <button data-view="metrics">Metrics</button>
+    </div>
+    <div class="grow"></div>
+    <div id="health" class="chip">…</div>
+    <div id="nodestat" class="mono" style="font-size:12px;color:var(--dim)"></div>
+    <button class="iconbtn" id="logout" title="Sign out">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/></svg>
+    </button>
+  </div>
+  <div id="view"></div>
+</div>
+
+<div id="hover" class="hide"></div>
+<div id="drawer"></div>
+
+<script src="./app.js"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+name: deploy
+
+# Publish the landscape image to GHCR on a release tag; Flux deploys it to k3s
+# (sujaykumarsuman/infra).
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  image:
+    uses: sujaykumarsuman/.github/.github/workflows/build-push.yml@main
+    with:
+      image: ghcr.io/sujaykumarsuman/landscape
+      dockerfile: Dockerfile
+      build-args: |
+        VERSION=${{ github.ref_name }}

@@ -252,6 +252,75 @@ button{font-family:var(--sans)}
 .kv:last-child{border-bottom:none}.kv .k2{color:var(--dim)}
 .warn{color:var(--warn);font-size:12px;padding:12px 20px}
 
+/* ---------- shared toolbar controls (events + metrics + logs) ---------- */
+.evtoolbar select,.mtoolbar select,.logctl select{height:30px;padding:0 8px;background:#0f131a;border:1px solid var(--line2);border-radius:7px;color:var(--text);font-family:var(--sans);font-size:12.5px;cursor:pointer}
+.evtoolbar select:focus,.mtoolbar select:focus,.logctl select:focus,#evq:focus{outline:none;border-color:var(--teal)}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:7px;overflow:hidden}
+.seg button{height:30px;padding:0 11px;border:none;background:#0f131a;color:var(--dim);font-family:var(--sans);font-size:12.5px;cursor:pointer;border-left:1px solid var(--line2)}
+.seg button:first-child{border-left:none}
+.seg button.on{background:rgba(53,208,192,.14);color:var(--teal)}
+.lc{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--dim)}
+.lbtn{height:30px;padding:0 12px;border:1px solid var(--line2);border-radius:7px;background:#0f131a;color:var(--dim);font-family:var(--sans);font-size:12.5px;cursor:pointer}
+.lbtn:hover{border-color:var(--teal);color:var(--teal)}
+
+/* ---------- app-detail tabs (buttons) + body pane ---------- */
+.appband .tabs .tab{height:32px;padding:0 12px;display:flex;align-items:center;border:none;background:none;border-radius:8px;color:var(--dim);font-size:13px;cursor:pointer}
+.appband .tabs .tab:hover{color:var(--text)}
+.appband .tabs .tab.on{background:rgba(53,208,192,.12);color:var(--teal)}
+#appbody.pane{flex:1;min-width:0;padding:18px 22px;overflow:auto}
+
+/* ---------- events list (shared: per-app + combined) ---------- */
+.evlist{display:flex;flex-direction:column;gap:8px}
+.evrow{display:flex;gap:12px;padding:11px 13px;background:var(--panel2);border:1px solid var(--line2);border-radius:9px}
+.evrow.warn{border-color:rgba(240,180,41,.4);background:#191509;padding:11px 13px}
+.evtype{display:flex;align-items:center;gap:6px;flex:none;width:74px;font-size:11px;color:var(--ok);text-transform:uppercase;letter-spacing:.4px}
+.evtype.w{color:var(--warn)}
+.evbody{flex:1;min-width:0}
+.evtop{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.evreason{font-size:13px;font-weight:600}
+.evobj{font-size:11px;color:var(--dim)}
+.evns{font-size:10.5px;color:var(--mut)}
+.evage{font-size:10.5px;color:var(--mut)}
+.evmsg{font-size:12px;color:var(--dim);margin-top:4px;line-height:1.5;overflow-wrap:anywhere}
+.evmeta{font-size:10.5px;color:var(--mut);margin-top:5px}
+.evfoot{font-size:11px;color:var(--mut);padding:12px 2px 4px}
+.evpane{min-height:100%}
+
+/* ---------- logs viewer ---------- */
+.logwrap{display:flex;flex-direction:column;gap:12px}
+.logctl{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.logpod{font-size:11px;color:var(--mut)}
+.logbox{margin:0;padding:12px 14px;background:#0a0d12;border:1px solid var(--line2);border-radius:9px;font-size:11.5px;line-height:1.55;color:var(--dim);overflow:auto;white-space:pre;min-height:220px;max-height:calc(100vh - 250px)}
+.logbox.empty{color:var(--mut);display:grid;place-items:center;white-space:normal}
+.lgl{display:inline}
+.lg-warn{color:var(--warn)}
+.lg-err{color:var(--err)}
+
+/* ---------- combined events page ---------- */
+.evpage{display:flex;flex-direction:column;height:calc(100vh - 56px)}
+.evtoolbar{display:flex;align-items:center;gap:10px;padding:12px 20px;border-bottom:1px solid var(--line);background:#0b0e13;flex-wrap:wrap}
+#evq{height:30px;min-width:200px;flex:1 1 200px;max-width:360px;padding:0 10px;background:#0f131a;border:1px solid var(--line2);border-radius:7px;color:var(--text);font-family:var(--sans);font-size:12.5px}
+.evcount{font-size:11.5px;color:var(--mut)}
+.evscroll{flex:1;overflow:auto;padding:14px 20px;min-height:0}
+.evpage>.stub,.evpage>.warn{flex:1}
+.evpage .evfoot{padding:8px 20px 12px;border-top:1px solid var(--line)}
+
+/* ---------- metrics toolbar ---------- */
+.mtoolbar{display:flex;align-items:center;gap:12px;padding:14px 18px 0;flex-wrap:wrap}
+.mupd{font-size:11px;color:var(--mut)}
+
+/* ---------- stub (empty / error states) ---------- */
+.stub{display:grid;place-items:center;padding:48px 20px;text-align:center;color:var(--mut)}
+.stub .box{max-width:460px}
+.stub h3{color:var(--text);font-size:15px;margin:10px 0 6px;font-weight:600}
+.stub p{font-size:13px;line-height:1.6}
+
+/* ---------- top-right events menu ---------- */
+.menu{position:relative;display:flex;align-items:center}
+.menupop{position:absolute;right:0;top:36px;z-index:60;min-width:184px;padding:6px;background:#0f1420;border:1px solid var(--line2);border-radius:10px;box-shadow:0 18px 46px rgba(0,0,0,.55);display:flex;flex-direction:column;gap:2px}
+.menupop button{text-align:left;height:32px;padding:0 10px;border:none;background:none;border-radius:7px;color:var(--dim);font-family:var(--sans);font-size:13px;cursor:pointer}
+.menupop button:hover,.menupop button:focus{background:#161d29;color:var(--text);outline:none}
+
 /* empty state (events) */
 .empty{display:grid;place-items:center;height:calc(100vh - 56px - 44px);text-align:center;color:var(--mut)}
 .empty .box{max-width:420px;padding:30px}

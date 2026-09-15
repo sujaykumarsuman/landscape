@@ -29,16 +29,27 @@ _Last updated: 2026-09-15 (v0.4.0)._
   the exact repo folder each one applies; the hover card is reachable so its
   deep-links are clickable; Flux version label fixed (`v2.9.5`).
 
-## Next (planned) — see `docs/prompts/002-events-logs-metrics.md`
+## In progress (branches — verified locally, pending review + deploy)
 
-- **Events browser**: per-app events (an Events tab in the app-detail graph
-  header), an events/logs menu in the top-right, and a combined events browser
-  with filters + search reached from the top nav (the `Events` tab).
-- **Logs viewer** in the app view (pod logs).
-- **Metrics tab controls** (range/refresh/namespace filters, etc.).
-- These need new endpoints and **new RBAC** (core `events` read; `pods/log` for
-  logs) — plan carefully against the read-only invariant (logs are pod stdout,
-  not Secret contents; `pods/log` is a `get` subresource). Details in the prompt.
+- **Per-app URL routing** (`feat/app-routes`): each view has a real URL under the
+  mount prefix — the map at the root, apps at `…/<app>`, and
+  `metrics`/`events`/`traefik` at `…/<word>`. Server SPA-fallback +
+  History-API router (deep-links, reload, back/forward). No RBAC change.
+- **Observability** (`feat/observability`, see
+  `docs/prompts/002-events-logs-metrics.md`): per-app **Events** tab, a combined
+  **Events browser** (nav tab) with namespace/type/kind filters + search, a
+  **Logs viewer** (app Logs tab, tail-on-demand), a top-right events/warnings
+  **menu**, and **Metrics controls** (namespace filter, sort, refresh/pause). All
+  read-only and verified in-browser (desktop + phone) against the live cluster.
+  - **Requires an infra change first** (`sujaykumarsuman/infra`): RBAC adds core
+    `events` (get,list) + `pods/log` (get) in `apps/landscape.yaml`; still no
+    `secrets`/`configmaps`/write verbs (invariant holds). Ship the RBAC before/
+    with the tag or the new endpoints 403 (the UI degrades gracefully).
+
+## Later
+
+- Logs live-follow via SSE (currently tail-on-demand); live CI status via the
+  GitHub API (currently deep-links only).
 
 ## Open questions
 

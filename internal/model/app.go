@@ -115,3 +115,29 @@ type GitOpsInfo struct {
 	Kusts       []KustDetail `json:"kustomizations,omitempty"`
 	AutoBump    bool         `json:"autoBump"`
 }
+
+// TraefikInfo drives the Traefik routing page: the ingress and every path it
+// routes to an app.
+type TraefikInfo struct {
+	UpdatedAt   time.Time      `json:"updatedAt"`
+	Version     string         `json:"version,omitempty"`
+	EntryPoints []string       `json:"entryPoints,omitempty"`
+	TLS         string         `json:"tls,omitempty"`
+	Routes      []TraefikRoute `json:"routes"`
+}
+
+// TraefikRoute is one IngressRoute path → app mapping.
+type TraefikRoute struct {
+	Name        string   `json:"name"`
+	App         string   `json:"app"`
+	Namespace   string   `json:"namespace,omitempty"`
+	Owner       bool     `json:"owner"`
+	Path        string   `json:"path"`
+	EntryPoint  string   `json:"entryPoint,omitempty"`
+	TLS         bool     `json:"tls"`
+	Middlewares []string `json:"middlewares,omitempty"`
+	Service     string   `json:"service,omitempty"`
+	Port        int32    `json:"port,omitempty"`
+	PortName    string   `json:"portName,omitempty"` // named (string) target port
+	PublicURL   string   `json:"publicUrl,omitempty"`
+}

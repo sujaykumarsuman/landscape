@@ -5,8 +5,12 @@ const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&
 const api = (p, o) => fetch("./api" + p, Object.assign({ headers: { "Content-Type": "application/json" } }, o));
 const cls = (st) => st === "ok" ? "ok" : st === "failed" ? "err" : "warn";
 
-const state = { graph: null, metrics: null, view: "map", appName: null, app: null };
+const state = { graph: null, metrics: null, view: "map", appName: null, app: null, traefik: null, pin: null };
 let pollTimer = null;
+
+// window listeners bound once at load (startApp may run again after a re-login)
+window.addEventListener("resize", () => { if (state.view === "app") drawAppEdges(); if (state.view === "traefik") drawTraefikEdges(); });
+window.addEventListener("keydown", (e) => { if (e.key === "Escape" && state.pin) unpin(); });
 
 init();
 async function init() {
@@ -35,30 +39,37 @@ async function startApp() {
   $("#logout").onclick = async () => { await api("/logout", { method: "POST" }); location.reload(); };
   $$(".nav button").forEach(b => b.onclick = () => setView(b.dataset.view));
   $("#crumb .home").onclick = () => setView("map");
-  window.addEventListener("resize", () => { if (state.view === "app") drawAppEdges(); });
   await refresh();
   pollTimer = setInterval(refresh, 15000);
 }
 function setView(v) {
   state.view = v;
   if (v !== "app") { state.appName = null; state.app = null; }
+  state.pin = null;
   $("#hover").classList.add("hide");
   syncChrome();
   render();
   refresh();
 }
 function openApp(name) {
-  state.view = "app"; state.appName = name; state.app = null;
+  state.view = "app"; state.appName = name; state.app = null; state.pin = null;
+  $("#hover").classList.add("hide");
+  syncChrome();
+  render();
+  refresh();
+}
+function openTraefik() {
+  state.view = "traefik"; state.traefik = null; state.pin = null;
   $("#hover").classList.add("hide");
   syncChrome();
   render();
   refresh();
 }
 function syncChrome() {
-  const inApp = state.view === "app";
-  $(".nav").classList.toggle("hide", inApp);
-  $("#crumb").classList.toggle("hide", !inApp);
-  if (inApp) $("#crumb .cur").textContent = state.appName || "";
+  const sub = state.view === "app" || state.view === "traefik";
+  $(".nav").classList.toggle("hide", sub);
+  $("#crumb").classList.toggle("hide", !sub);
+  if (sub) $("#crumb .cur").textContent = state.view === "traefik" ? "Traefik" : (state.appName || "");
   $$(".nav button").forEach(b => b.classList.toggle("on", b.dataset.view === state.view));
 }
 
@@ -68,6 +79,11 @@ async function refresh() {
       const [ar, mr] = await Promise.all([api("/app/" + encodeURIComponent(state.appName)), api("/metrics")]);
       if (ar.status === 401) { clearInterval(pollTimer); return showLogin(); }
       if (ar.ok) state.app = await ar.json();
+      if (mr.ok) state.metrics = await mr.json();
+    } else if (state.view === "traefik") {
+      const [tr, mr] = await Promise.all([api("/traefik"), api("/metrics")]);
+      if (tr.status === 401) { clearInterval(pollTimer); return showLogin(); }
+      if (tr.ok) state.traefik = await tr.json();
       if (mr.ok) state.metrics = await mr.json();
     } else {
       const [gr, mr] = await Promise.all([api("/graph"), api("/metrics")]);
@@ -126,6 +142,7 @@ function icon(kind, w = 13, stroke = "currentColor") {
 function render() {
   const v = $("#view");
   if (state.view === "events") return renderEvents(v);
+  if (state.view === "traefik") return renderTraefik(v);
   if (state.view === "app") return renderApp(v);
   if (state.view === "metrics") { if (!state.graph) { v.innerHTML = loading(); return; } return renderMetrics(v); }
   if (!state.graph) { v.innerHTML = loading(); return; }
@@ -217,10 +234,10 @@ function renderMap(v) {
   const lane4 = `<div class="lane cluster">
     <div class="lanehdr"><span style="display:flex;align-items:center;gap:8px">${icon("cluster", 14, "#9aa4b2")} Cluster · k3s @ ${esc(c.node || "node")}</span>${cap ? `<span class="cap">${esc(cap)}</span>` : ""}</div>
     <div class="clusterbody">
-      <div class="traefik-rail">${icon("ingress", 18, "#35d0c0")}<div class="vt">Traefik · :443 TLS</div></div>
+      <div class="traefik-rail" title="Open Traefik routing">${icon("ingress", 18, "#35d0c0")}<div class="vt">Traefik · :443 TLS</div></div>
       <div class="clustercol">
-        <div class="nsrow">${nsBoxes}</div>
-        <div class="platform-box"><span class="kind" style="color:var(--dim)">platform namespaces</span><div class="platform-grid">${platCards}</div></div>
+        <div class="nsrow hscroll">${nsBoxes}</div>
+        <div class="platform-box"><span class="kind" style="color:var(--dim)">platform namespaces</span><div class="platform-grid hscroll">${platCards}</div></div>
         <div class="footer-note">${icon("clock", 13, "#616b7a")} local-path PVCs · memory-only sessions · data wiped on start</div>
       </div>
     </div></div>`;
@@ -286,24 +303,58 @@ function legendHTML() {
   </div>`;
 }
 
-/* map interactions: hover flow-highlight + click to open app */
+/* map interactions: hover flow-highlight (transient) + click to pin the
+   highlight (hides the hover card so the whole flow stays visible) */
 function wireMap(byId) {
   const map = $(".map");
   $$(".map [data-id]").forEach(el => {
     const node = byId[el.dataset.id];
+    const app = el.dataset.app;
     el.addEventListener("mouseenter", () => {
-      const app = el.dataset.app;
-      if (app) {
-        map.classList.add("tracing");
-        $$(`.map [data-app="${cssq(app)}"]`).forEach(x => x.classList.add("trace"));
-      }
+      if (state.pin) return;                 // locked: don't re-trace on hover
+      if (app) applyTrace(app);
       if (node) showHoverCard(el, node);
     });
-    el.addEventListener("mouseleave", clearTrace);
+    el.addEventListener("mouseleave", () => { if (!state.pin) clearTrace(); });
+    el.addEventListener("click", (e) => {
+      if (e.target.closest(".open") || e.target.closest(".linkchip")) return; // nav / link
+      e.stopPropagation();
+      $("#hover").classList.add("hide");
+      if (!app) return;
+      if (state.pin && state.pin === app) unpin(); else pinApp(app);
+    });
   });
-  $$(".map .app-card").forEach(el => el.addEventListener("click", () => openApp(el.dataset.appname)));
+  // "open components →" navigates to the app page (does not pin)
+  $$(".map .app-card .open").forEach(el => el.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openApp(el.closest(".app-card").dataset.appname);
+  }));
+  // Traefik rail → routing page
+  const rail = $(".map .traefik-rail");
+  if (rail) rail.addEventListener("click", openTraefik);
+  // click empty space clears a pin
+  map.addEventListener("click", (e) => { if (!e.target.closest("[data-id]") && !e.target.closest(".traefik-rail")) unpin(); });
+  // re-apply a live pin after a poll re-render
+  if (state.pin) { map.classList.add("pinned"); applyTrace(state.pin); }
 }
 function cssq(s) { return String(s).replace(/"/g, '\\"'); }
+function applyTrace(app) {
+  const map = $(".map"); if (!map) return;
+  map.classList.add("tracing");
+  $$(".map .trace").forEach(x => x.classList.remove("trace"));
+  $$(`.map [data-app="${cssq(app)}"]`).forEach(x => x.classList.add("trace"));
+}
+function pinApp(app) {
+  state.pin = app;
+  const map = $(".map"); map.classList.add("pinned");
+  applyTrace(app);
+}
+function unpin() {
+  if (!state.pin) return;
+  state.pin = null;
+  const map = $(".map"); if (map) map.classList.remove("pinned");
+  clearTrace();
+}
 function clearTrace() {
   const map = $(".map"); if (map) map.classList.remove("tracing");
   $$(".map .trace").forEach(x => x.classList.remove("trace"));
@@ -582,6 +633,81 @@ function renderMetrics(v) {
     <div class="mcard wide"><div class="h">Top pods · memory</div><div style="margin-top:14px">${podBars || '<div class="mono" style="color:var(--mut)">—</div>'}</div></div>
     <div class="mcard wide"><div class="h">GitOps reconciliation</div><div style="margin-top:8px">${recon || '<div class="mono" style="color:var(--mut)">—</div>'}</div></div>
   </div>`;
+}
+
+/* ---------- TRAEFIK (routing page) ---------- */
+function renderTraefik(v) {
+  const t = state.traefik;
+  if (!t) { v.innerHTML = `<div class="warn">loading Traefik routes…</div>`; return; }
+  const eps = (t.entryPoints || []).join(" · ");
+  const meta = [eps, t.tls].filter(Boolean).join(" · ");
+
+  const band = `<div class="appband">
+    <div class="tile">${icon("ingress", 22, "#35d0c0")}</div>
+    <div>
+      <div class="titlerow">
+        <h1>Traefik</h1>
+        <span class="badge ok"><span class="dot s-ok"></span>ingress</span>
+        ${t.version ? `<span class="ver">v${esc(t.version)}</span>` : ""}
+      </div>
+      <div class="meta">${esc(meta || "edge router · path-prefix routing")}</div>
+    </div>
+    <span class="grow"></span>
+  </div>`;
+
+  const routes = (t.routes || []).map((r, i) => {
+    const mws = (r.middlewares || []).map(m => {
+      const label = m.startsWith(r.app + "-") ? m.slice(r.app.length + 1) : m;
+      return `<span class="mwchip">mw ${esc(label)}</span>`;
+    }).join("");
+    const portLabel = r.port ? ":" + r.port : (r.portName ? ":" + esc(r.portName) : "");
+    const svc = r.service ? `→ svc ${esc(r.service)}${portLabel}` : "";
+    return `<div class="troute ${r.owner ? "owner" : ""}" data-gid="r${i}" data-appname="${esc(r.app)}">
+      <div class="trhead"><span class="tpath mono">${esc(r.path)}</span>${r.owner ? icon("chevron", 13, "#35d0c0") : ""}</div>
+      <div class="trapp">${esc(r.app)}<span class="trns">ns ${esc(r.namespace || "")}</span></div>
+      ${svc ? `<div class="trsvc mono">${svc}</div>` : ""}
+      ${mws ? `<div class="mws">${mws}</div>` : ""}
+      <div class="trep mono">${esc(r.entryPoint || "websecure")}${r.tls ? " · TLS" : ""}</div>
+    </div>`;
+  }).join("");
+
+  v.innerHTML = band + `<div class="tfmain"><div id="tfwrap">
+    <svg id="tfedges"></svg>
+    <div class="tfgraph">
+      <div class="tfsource">
+        <div class="tfnet mono">Internet ↓</div>
+        <div class="gnode teal" data-gid="tf">
+          <div class="gk">${icon("ingress", 12, "#35d0c0")}ingress · Traefik</div>
+          <div class="gn">Traefik</div>
+          <div class="gs">${esc((t.entryPoints || ["websecure"]).join(" · "))}</div>
+          ${t.tls ? `<div class="gs">${esc(t.tls)}</div>` : ""}
+        </div>
+        <div class="tfhint">TLS terminates here · routes by path prefix</div>
+      </div>
+      <div class="troutes">${routes || '<div class="warn">no ingress routes found.</div>'}</div>
+    </div></div></div>`;
+
+  $$("#tfwrap .troute.owner").forEach(el => el.addEventListener("click", () => openApp(el.dataset.appname)));
+  requestAnimationFrame(drawTraefikEdges);
+}
+function drawTraefikEdges() {
+  const wrap = $("#tfwrap"), svg = $("#tfedges");
+  if (!wrap || !svg) return;
+  const W = wrap.scrollWidth, H = wrap.scrollHeight;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("width", W); svg.setAttribute("height", H);
+  const base = wrap.getBoundingClientRect();
+  const pos = {};
+  wrap.querySelectorAll("[data-gid]").forEach(el => {
+    const r = el.getBoundingClientRect();
+    pos[el.dataset.gid] = { x: r.left - base.left, y: r.top - base.top, w: r.width, h: r.height };
+  });
+  const tf = pos["tf"]; if (!tf) { svg.innerHTML = ""; return; }
+  let paths = "";
+  Object.keys(pos).filter(k => /^r\d+$/.test(k)).forEach(k => {
+    const p = anchor(tf, pos[k]);
+    paths += `<path d="M ${p.x1} ${p.y1} C ${p.cx1} ${p.cy1}, ${p.cx2} ${p.cy2}, ${p.x2} ${p.y2}" fill="none" stroke="#35d0c0" stroke-width="1.5" marker-end="url(#tf-ar)"/>`;
+  });
+  svg.innerHTML = `<defs><marker id="tf-ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M2 2 8 5 2 8" fill="none" stroke="#35d0c0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>` + paths;
 }
 
 /* ---------- EVENTS (placeholder) ---------- */

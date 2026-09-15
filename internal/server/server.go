@@ -46,6 +46,8 @@ type Server struct {
 	metrics   *model.Metrics
 	metricsAt time.Time
 	apps      map[string]appEntry
+	traefik   *model.TraefikInfo
+	traefikAt time.Time
 }
 
 type appEntry struct {
@@ -78,6 +80,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/graph", s.requireAuth(s.graphH))
 	mux.HandleFunc("/api/metrics", s.requireAuth(s.metricsH))
 	mux.HandleFunc("GET /api/app/{name}", s.requireAuth(s.appH))
+	mux.HandleFunc("/api/traefik", s.requireAuth(s.traefikH))
 
 	sub, _ := fs.Sub(webFS, "web")
 	mux.Handle("/", http.FileServer(http.FS(sub)))
@@ -192,6 +195,38 @@ func (s *Server) getApp(ctx context.Context, name string) (*model.AppDetail, err
 	s.apps[name] = appEntry{d: d, at: time.Now()}
 	s.mu.Unlock()
 	return d, nil
+}
+
+func (s *Server) traefikH(w http.ResponseWriter, r *http.Request) {
+	t, err := s.getTraefik(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, t)
+}
+
+func (s *Server) getTraefik(ctx context.Context) (*model.TraefikInfo, error) {
+	s.mu.Lock()
+	if s.traefik != nil && time.Since(s.traefikAt) < s.opt.CacheTTL {
+		t := s.traefik
+		s.mu.Unlock()
+		return t, nil
+	}
+	s.mu.Unlock()
+	t, err := s.col.Traefik(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if u, err := url.Parse(s.opt.PublicURL); err == nil && u.Host != "" {
+		for i := range t.Routes {
+			t.Routes[i].PublicURL = u.Scheme + "://" + u.Host + t.Routes[i].Path
+		}
+	}
+	s.mu.Lock()
+	s.traefik, s.traefikAt = t, time.Now()
+	s.mu.Unlock()
+	return t, nil
 }
 
 func (s *Server) getGraph(ctx context.Context) (*model.Graph, error) {

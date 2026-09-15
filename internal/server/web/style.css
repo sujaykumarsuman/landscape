@@ -95,8 +95,15 @@ button{font-family:var(--sans)}
   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:12px 0}
 .traefik-rail .vt{writing-mode:vertical-rl;transform:rotate(180deg);font-size:11px;color:var(--dim);letter-spacing:.5px;white-space:nowrap}
 .clustercol{flex:1;display:flex;flex-direction:column;gap:10px;min-width:0}
-.nsrow{display:flex;gap:10px;flex-wrap:wrap}
-.ns-box{flex:1 1 190px;min-width:0;border:1px dashed var(--line2);border-radius:10px;padding:10px}
+.nsrow{display:flex;gap:10px;flex-wrap:nowrap;overflow-x:auto;min-width:0;padding-bottom:2px}
+.ns-box{flex:1 0 200px;min-width:0;border:1px dashed var(--line2);border-radius:10px;padding:10px}
+
+/* thin, theme-matched horizontal scrollbar */
+.hscroll{scrollbar-width:thin;scrollbar-color:var(--line2) transparent}
+.hscroll::-webkit-scrollbar{height:6px}
+.hscroll::-webkit-scrollbar-track{background:transparent}
+.hscroll::-webkit-scrollbar-thumb{background:var(--line2);border-radius:3px}
+.hscroll::-webkit-scrollbar-thumb:hover{background:#3a4454}
 .ns-box .nsh{display:flex;align-items:center;justify-content:space-between}
 .ns-box .nsh .rdy{font-size:10px;color:var(--ok)}
 .app-card{margin-top:8px;border-radius:8px;padding:10px;cursor:pointer;background:#131c1c;border:1px solid rgba(53,208,192,.4);transition:border-color .14s,box-shadow .14s}
@@ -110,8 +117,8 @@ button{font-family:var(--sans)}
 .app-card .achips{display:flex;gap:5px;margin-top:8px;flex-wrap:wrap}
 .app-card .open{display:flex;align-items:center;gap:5px;margin-top:8px;color:var(--teal);font-size:10.5px}
 .platform-box{border:1px dashed var(--line2);border-radius:10px;padding:10px}
-.platform-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-top:8px}
-.platform-grid .card{padding:8px 9px}
+.platform-grid{display:flex;flex-wrap:nowrap;overflow-x:auto;min-width:0;gap:8px;margin-top:8px;padding-bottom:2px}
+.platform-grid .card{flex:1 0 140px;padding:8px 9px}
 .platform-grid .pn{font-size:12px}
 .platform-grid .ps{font-family:var(--mono);font-size:10px;color:var(--mut);margin-top:2px}
 .footer-note{display:flex;align-items:center;gap:7px;color:var(--mut);font-size:11px;padding:2px}
@@ -200,6 +207,26 @@ button{font-family:var(--sans)}
 .railbtns .rb:hover{border-color:var(--line2);color:var(--text)}
 .railbtns .rb[disabled]{opacity:.5;cursor:not-allowed}
 
+/* ---------- traefik routing page ---------- */
+#tfwrap{position:relative;padding:26px 24px 40px;overflow-x:auto}
+#tfedges{position:absolute;inset:0;pointer-events:none;z-index:0}
+.tfgraph{position:relative;z-index:1;display:grid;grid-template-columns:240px 1fr;gap:60px;align-items:start}
+.tfsource{display:flex;flex-direction:column;gap:8px;position:sticky;top:26px}
+.tfsource .gnode{width:100%;max-width:240px}
+.tfnet{font-size:11px;color:var(--mut);text-align:center;letter-spacing:.3px}
+.tfhint{font-size:11px;color:var(--mut);line-height:1.5;max-width:220px;margin-top:2px}
+.troutes{display:flex;flex-direction:column;gap:14px}
+.troute{background:var(--panel2);border:1px solid var(--line2);border-radius:10px;padding:12px 14px;max-width:520px}
+.troute.owner{cursor:pointer;transition:border-color .14s,box-shadow .14s}
+.troute.owner:hover{border-color:var(--teal);box-shadow:0 0 0 1px rgba(53,208,192,.3)}
+.troute .trhead{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.troute .tpath{font-size:15px;color:var(--teal)}
+.troute .trapp{font-size:13px;margin-top:4px;display:flex;align-items:center;gap:8px}
+.troute .trns{font-family:var(--mono);font-size:10.5px;color:var(--mut)}
+.troute .trsvc{font-size:11px;color:var(--dim);margin-top:3px}
+.troute .trep{font-size:10.5px;color:var(--mut);margin-top:6px}
+.troute .mws{margin-top:8px}
+
 /* ---------- metrics ---------- */
 .grid{display:grid;gap:16px;padding:18px;grid-template-columns:repeat(4,minmax(0,1fr))}
 .mcard{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
@@ -226,7 +253,9 @@ button{font-family:var(--sans)}
   .rail{width:auto;border-left:none;border-top:1px solid var(--line)}
   .gcols{grid-template-columns:1fr}
   .gcol{gap:16px}
-  #gedges{display:none}
+  #gedges,#tfedges{display:none}
+  .tfgraph{grid-template-columns:1fr;gap:20px}
+  .tfsource{position:static}
 }
 @media(max-width:900px){
   .map{flex-direction:column}

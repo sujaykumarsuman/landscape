@@ -63,6 +63,31 @@ func parseGitURL(u string) (owner, repo string, ok bool) {
 	return "", "", false
 }
 
+// repoRef identifies a GitHub repository, optionally a subdirectory within it.
+type repoRef struct {
+	Owner  string
+	Repo   string
+	Subdir string
+}
+
+// imageSourceOverrides maps an "owner/repo" image name to the repository its
+// image is actually built from, for the cases where the two differ. Most images
+// are built from a repo of the same name (ghcr.io/<owner>/<app> ← <owner>/<app>),
+// but the projects-hub image is built by the sujaykumarsuman.github.io repo from
+// its projects/ directory — there is no repo named "projects-hub".
+var imageSourceOverrides = map[string]repoRef{
+	"sujaykumarsuman/projects-hub": {Owner: "sujaykumarsuman", Repo: "sujaykumarsuman.github.io", Subdir: "projects"},
+}
+
+// sourceRepo resolves the GitHub source repository (and any subdirectory) for an
+// image: an override when one is registered, otherwise the image name itself.
+func sourceRepo(img imageRef) repoRef {
+	if r, ok := imageSourceOverrides[img.Owner+"/"+img.Repo]; ok {
+		return r
+	}
+	return repoRef{Owner: img.Owner, Repo: img.Repo}
+}
+
 // ghLinks builds the deep-links for an owned app image plus its GitOps config.
 func ghLinks(img imageRef, infraOwner, infraRepo, infraBranch, app string) []model.Link {
 	if infraBranch == "" {
@@ -70,9 +95,17 @@ func ghLinks(img imageRef, infraOwner, infraRepo, infraBranch, app string) []mod
 	}
 	var out []model.Link
 	if img.Owner != "" && img.Repo != "" {
-		base := "https://github.com/" + img.Owner + "/" + img.Repo
+		// The source repo is not always the image name (e.g. projects-hub); the
+		// GHCR package still resolves under the source repo's path.
+		src := sourceRepo(img)
+		base := "https://github.com/" + src.Owner + "/" + src.Repo
+		sourceURL, sourceLabel := base, src.Owner+"/"+src.Repo
+		if src.Subdir != "" {
+			sourceURL += "/tree/main/" + src.Subdir
+			sourceLabel += "/" + src.Subdir
+		}
 		out = append(out,
-			model.Link{Type: "source", URL: base, Label: img.Owner + "/" + img.Repo},
+			model.Link{Type: "source", URL: sourceURL, Label: sourceLabel},
 			model.Link{Type: "workflow", URL: base + "/blob/main/.github/workflows/deploy.yml", Label: "deploy.yml"},
 			model.Link{Type: "image", URL: base + "/pkgs/container/" + img.Repo, Label: "ghcr · " + img.Repo},
 		)

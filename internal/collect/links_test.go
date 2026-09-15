@@ -58,6 +58,28 @@ func TestGhLinks(t *testing.T) {
 	}
 }
 
+func TestGhLinksProjectsHub(t *testing.T) {
+	// projects-hub is built from the sujaykumarsuman.github.io repo (projects/),
+	// not a repo named "projects-hub" — its links must resolve to the real source.
+	img := parseImage("ghcr.io/sujaykumarsuman/projects-hub:0.1.1")
+	links := ghLinks(img, "sujaykumarsuman", "infra", "main", "projects-hub")
+	byType := map[string]string{}
+	for _, l := range links {
+		byType[l.Type] = l.URL
+	}
+	want := map[string]string{
+		"source":   "https://github.com/sujaykumarsuman/sujaykumarsuman.github.io/tree/main/projects",
+		"workflow": "https://github.com/sujaykumarsuman/sujaykumarsuman.github.io/blob/main/.github/workflows/deploy.yml",
+		"image":    "https://github.com/sujaykumarsuman/sujaykumarsuman.github.io/pkgs/container/projects-hub",
+		"config":   "https://github.com/sujaykumarsuman/infra/blob/main/apps/projects-hub.yaml",
+	}
+	for k, v := range want {
+		if byType[k] != v {
+			t.Errorf("link %s = %q, want %q", k, byType[k], v)
+		}
+	}
+}
+
 func TestExtractPathPrefix(t *testing.T) {
 	got := extractPathPrefix("Host(`projects.sujaykumar.dev`) && PathPrefix(`/airlift`)")
 	if got != "/airlift" {

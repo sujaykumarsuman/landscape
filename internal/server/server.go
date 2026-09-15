@@ -327,6 +327,19 @@ func (s *Server) cachedJSON(w http.ResponseWriter, r *http.Request, key string, 
 		return
 	}
 	s.mu.Lock()
+	// bound the cache: free-text search makes keys unbounded, so evict expired
+	// entries (and, if still full of fresh ones, reset) before inserting.
+	if len(s.misc) >= 512 {
+		now := time.Now()
+		for k, e := range s.misc {
+			if now.Sub(e.at) >= s.opt.CacheTTL {
+				delete(s.misc, k)
+			}
+		}
+		if len(s.misc) >= 512 {
+			s.misc = map[string]cacheEntry{}
+		}
+	}
 	s.misc[key] = cacheEntry{v: v, at: time.Now()}
 	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, v)

@@ -7,7 +7,7 @@ const cls = (st) => st === "ok" ? "ok" : st === "failed" ? "err" : "warn";
 
 const state = {
   graph: null, metrics: null, view: "map", appName: null, app: null, traefik: null, pin: null,
-  appTab: "graph", appEvents: null, logs: null, events: null,
+  appTab: "graph", appEvents: null, appError: null, logs: null, events: null,
   eventsFilter: { ns: "", type: "", kind: "", q: "" },
   logsCtl: { container: "", tail: 500 },
   metricsCtl: { ns: "", sort: "mem", interval: 15000 },
@@ -101,6 +101,7 @@ function applyRoute(view, appName) {
   state.view = view;
   state.appName = view === "app" ? appName : null;
   state.app = null;
+  state.appError = null;
   state.traefik = null;
   state.appTab = "graph";
   state.appEvents = null;
@@ -173,7 +174,9 @@ function syncChrome() {
   $$(".nav button").forEach(b => b.classList.toggle("on", b.dataset.view === state.view));
 }
 
+let reqGen = 0;
 async function refresh() {
+  const gen = ++reqGen;
   try {
     const calls = [["metrics", api("/metrics")]];
     if (state.view === "app" && state.appName) {
@@ -193,13 +196,23 @@ async function refresh() {
     }
     const R = await gather(calls);
     if (is401(R)) return loginOut();
-    if (R.metrics && R.metrics.ok) state.metrics = await R.metrics.json();
-    if (R.graph && R.graph.ok) state.graph = await R.graph.json();
-    if (R.app && R.app.ok) state.app = await R.app.json();
-    if (R.traefik && R.traefik.ok) state.traefik = await R.traefik.json();
-    if (R.ev) state.appEvents = R.ev.ok ? await R.ev.json() : { error: true };
-    if (R.logs) state.logs = R.logs.ok ? await R.logs.json() : { error: true };
-    if (R.events) state.events = R.events.ok ? await R.events.json() : { error: true };
+    // resolve all bodies first, then commit atomically — but only if a newer
+    // navigation/poll hasn't superseded this fetch (guards out-of-order writes)
+    const P = {};
+    for (const k of Object.keys(R)) {
+      if (R[k] && R[k].ok) { try { P[k] = await R[k].json(); } catch (_) { /* ignore */ } }
+    }
+    if (gen !== reqGen) return;
+    if (P.metrics) state.metrics = P.metrics;
+    if (P.graph) state.graph = P.graph;
+    if (R.app) {
+      if (P.app) { state.app = P.app; state.appError = null; }
+      else { state.app = null; state.appError = R.app.status === 404 ? "notfound" : "error"; }
+    }
+    if (R.traefik && P.traefik) state.traefik = P.traefik;
+    if (R.ev) state.appEvents = P.ev || { error: true };
+    if (R.logs) state.logs = P.logs || { error: true };
+    if (R.events) state.events = P.events || { error: true };
     renderHeader();
     render();
   } catch (e) { /* keep last view */ }
@@ -531,7 +544,17 @@ function showHoverCard(el, n) {
 /* ---------- APP DETAIL (full page) ---------- */
 function renderApp(v) {
   const d = state.app;
-  if (!d) { v.innerHTML = `<div class="warn">loading ${esc(state.appName || "")}…</div>`; return; }
+  if (!d) {
+    if (state.appError) {
+      v.innerHTML = state.appError === "notfound"
+        ? errBox("App not found", `No app “${state.appName || ""}” in the cluster.`)
+        : errBox("Couldn’t load app", `The API returned an error for “${state.appName || ""}”.`);
+      return;
+    }
+    v.innerHTML = `<div class="warn">loading ${esc(state.appName || "")}…</div>`;
+    return;
+  }
+  const prevLog = state.appTab === "logs" ? logScrollState() : null;
   const violet = !d.owner;
   const st = d.status || "unknown";
   const badge = st === "ok" ? ["ok", "Healthy"] : st === "failed" ? ["err", "Failed"] : ["warn", "Progressing"];
@@ -559,7 +582,7 @@ function renderApp(v) {
   else body = `<div id="graphwrap">${appGraphHTML(d)}</div>`;
 
   v.innerHTML = band + `<div class="appmain">${body}${appRailHTML(d)}</div>`;
-  wireApp(d);
+  wireApp(d, prevLog);
   if (state.appTab === "graph") requestAnimationFrame(drawAppEdges);
 }
 
@@ -745,12 +768,17 @@ function spark(frac, color) {
   return `<svg class="spark" viewBox="0 0 308 30" preserveAspectRatio="none"><line x1="0" y1="29" x2="308" y2="29" stroke="#1b2028" stroke-width="1"/><polyline points="0,${y} 308,${y}" fill="none" stroke="${color}" stroke-width="1.5"/></svg>`;
 }
 
-function wireApp(d) {
+function wireApp(d, prevLog) {
   $$(".appband .tab").forEach(b => b.onclick = () => setAppTab(b.dataset.tab));
   $$(".railbtns .rb").forEach(b => b.onclick = () => setAppTab(b.dataset.tab));
-  if (state.appTab === "logs") wireLogs();
+  if (state.appTab === "logs") wireLogs(prevLog);
 }
-function wireLogs() {
+function logScrollState() {
+  const b = $("#logbox");
+  if (!b) return null;
+  return { atBottom: b.scrollTop + b.clientHeight >= b.scrollHeight - 8, top: b.scrollTop };
+}
+function wireLogs(prevLog) {
   const c = $("#logcontainer");
   if (c) c.onchange = () => { state.logsCtl.container = c.value; state.logs = null; render(); refresh(); };
   const t = $("#logtail");
@@ -758,7 +786,12 @@ function wireLogs() {
   const rb = $("#logrefresh");
   if (rb) rb.onclick = () => refresh();
   const box = $("#logbox");
-  if (box) box.scrollTop = box.scrollHeight; // tail: keep newest in view
+  if (box) {
+    // tail to newest on first open / after a refresh, but preserve the reader's
+    // position if they've scrolled up to read older lines
+    if (!prevLog || prevLog.atBottom) box.scrollTop = box.scrollHeight;
+    else box.scrollTop = prevLog.top;
+  }
 }
 
 /* app graph edges: computed from DOM node rects */

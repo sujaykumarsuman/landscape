@@ -7,10 +7,20 @@ const cls = (st) => st === "ok" ? "ok" : st === "failed" ? "err" : "warn";
 
 const state = { graph: null, metrics: null, view: "map", appName: null, app: null, traefik: null, pin: null };
 let pollTimer = null;
+let started = false;
 
 // window listeners bound once at load (startApp may run again after a re-login)
 window.addEventListener("resize", () => { if (state.view === "app") drawAppEdges(); if (state.view === "traefik") drawTraefikEdges(); });
 window.addEventListener("keydown", (e) => { if (e.key === "Escape" && state.pin) unpin(); });
+// browser back/forward: reflect the URL into the view (no new history entry)
+window.addEventListener("popstate", () => {
+  if (!started) return;
+  const r = routeFromURL();
+  applyRoute(r.view, r.appName);
+  syncChrome();
+  render();
+  refresh();
+});
 // keep the hover card alive while the cursor is over it (so its links are clickable)
 {
   const hv = document.querySelector("#hover");
@@ -39,37 +49,65 @@ function showLogin() {
   };
 }
 async function startApp() {
+  started = true;
   $("#login").classList.add("hide");
   $("#app").classList.remove("hide");
   $("#logout").onclick = async () => { await api("/logout", { method: "POST" }); location.reload(); };
   $$(".nav button").forEach(b => b.onclick = () => setView(b.dataset.view));
   $("#crumb .home").onclick = () => setView("map");
+  // adopt the deep-linked URL as the initial view (e.g. /landscape/airlift)
+  const r = routeFromURL();
+  applyRoute(r.view, r.appName);
+  history.replaceState(routeState(), "", pathFor(state.view, state.appName));
+  syncChrome();
+  render();
   await refresh();
   pollTimer = setInterval(refresh, 15000);
 }
-function setView(v) {
-  state.view = v;
-  if (v !== "app") { state.appName = null; state.app = null; }
+
+/* ---------- client-side router (History API) ----------
+   The UI is one page served under a path prefix (…/landscape/). Each view gets a
+   real URL: the map at the mount root, apps at …/<app>, and the reserved words
+   metrics|events|traefik at …/<word>. The base is the mount path (dirname of the
+   current pathname), so links stay prefix-agnostic and work in local dev too. */
+const RESERVED = { metrics: 1, events: 1, traefik: 1 };
+function currentBase() { const p = location.pathname; return p.slice(0, p.lastIndexOf("/") + 1); }
+function pathFor(view, appName) {
+  const b = currentBase();
+  if (view === "app") return b + encodeURIComponent(appName);
+  if (RESERVED[view]) return b + view;
+  return b; // map
+}
+function routeState() { return { view: state.view, appName: state.appName }; }
+function routeFromURL() {
+  const p = location.pathname;
+  const seg = decodeURIComponent(p.slice(p.lastIndexOf("/") + 1));
+  if (seg === "metrics" || seg === "events" || seg === "traefik") return { view: seg, appName: null };
+  if (seg === "") return { view: "map", appName: null };
+  return { view: "app", appName: seg };
+}
+// set view state (no history change, no render) — shared by nav + popstate
+function applyRoute(view, appName) {
+  state.view = view;
+  state.appName = view === "app" ? appName : null;
+  state.app = null;
+  state.traefik = null;
   state.pin = null;
   $("#hover").classList.add("hide");
+}
+// navigate: change state, push a history entry, re-render + fetch
+function navigate(view, appName) {
+  const samePath = pathFor(view, appName) === (location.pathname);
+  applyRoute(view, appName);
+  if (!samePath) history.pushState(routeState(), "", pathFor(view, appName));
+  else history.replaceState(routeState(), "", pathFor(view, appName));
   syncChrome();
   render();
   refresh();
 }
-function openApp(name) {
-  state.view = "app"; state.appName = name; state.app = null; state.pin = null;
-  $("#hover").classList.add("hide");
-  syncChrome();
-  render();
-  refresh();
-}
-function openTraefik() {
-  state.view = "traefik"; state.traefik = null; state.pin = null;
-  $("#hover").classList.add("hide");
-  syncChrome();
-  render();
-  refresh();
-}
+function setView(v) { navigate(v, null); }
+function openApp(name) { navigate("app", name); }
+function openTraefik() { navigate("traefik", null); }
 function syncChrome() {
   const sub = state.view === "app" || state.view === "traefik";
   $(".nav").classList.toggle("hide", sub);

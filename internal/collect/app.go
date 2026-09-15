@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -320,6 +321,114 @@ func (co *Collector) kustomizationUsesSOPS(ctx context.Context) bool {
 	}
 	prov, _, _ := unstructured.NestedString(k.Object, "spec", "decryption", "provider")
 	return prov == "sops"
+}
+
+// Traefik returns the ingress and every path it routes to an app (for the
+// Traefik routing page).
+func (co *Collector) Traefik(ctx context.Context) (*model.TraefikInfo, error) {
+	info := &model.TraefikInfo{UpdatedAt: time.Now()}
+
+	// map ns/name → owned (ghcr image of this owner)
+	owned := map[string]bool{}
+	if deps, err := co.c.Typed.AppsV1().Deployments("").List(ctx, metav1.ListOptions{}); err == nil {
+		for i := range deps.Items {
+			d := &deps.Items[i]
+			if len(d.Spec.Template.Spec.Containers) == 0 {
+				continue
+			}
+			img := parseImage(d.Spec.Template.Spec.Containers[0].Image)
+			if img.Registry == "ghcr.io" && img.Owner == co.githubOwner {
+				owned[d.Namespace+"/"+d.Name] = true
+			}
+		}
+	}
+
+	irs, err := co.list(ctx, gvrIngressRoute)
+	if err != nil {
+		return info, err
+	}
+	eps := map[string]bool{}
+	for _, ir := range irs {
+		ns := ir.GetNamespace()
+		irEps, _, _ := unstructured.NestedStringSlice(ir.Object, "spec", "entryPoints")
+		_, hasTLS, _ := unstructured.NestedMap(ir.Object, "spec", "tls")
+		routes, _, _ := unstructured.NestedSlice(ir.Object, "spec", "routes")
+		for _, r := range routes {
+			rm, ok := r.(map[string]any)
+			if !ok {
+				continue
+			}
+			// pair name+port+namespace from the same service entry (last named wins)
+			var svcName, svcNs, portName string
+			var port int32
+			svcs, _, _ := unstructured.NestedSlice(rm, "services")
+			for _, s := range svcs {
+				sm, ok := s.(map[string]any)
+				if !ok {
+					continue
+				}
+				n, _ := sm["name"].(string)
+				if n == "" {
+					continue
+				}
+				svcName, svcNs, port, portName = n, ns, 0, ""
+				if sn, _ := sm["namespace"].(string); sn != "" {
+					svcNs = sn // Traefik cross-namespace service ref
+				}
+				switch p := sm["port"].(type) {
+				case int64:
+					port = int32(p)
+				case float64:
+					port = int32(p)
+				case string:
+					if v, err := strconv.Atoi(p); err == nil {
+						port = int32(v)
+					} else {
+						portName = p // named port
+					}
+				}
+			}
+			if svcName == "" {
+				continue
+			}
+			var mws []string
+			mwl, _, _ := unstructured.NestedSlice(rm, "middlewares")
+			for _, m := range mwl {
+				if mm, ok := m.(map[string]any); ok {
+					if n, _ := mm["name"].(string); n != "" {
+						mws = append(mws, n)
+					}
+				}
+			}
+			ep := ""
+			if len(irEps) > 0 {
+				ep = irEps[0]
+			}
+			for _, e := range irEps {
+				eps[e] = true
+			}
+			info.Routes = append(info.Routes, model.TraefikRoute{
+				Name: ir.GetName(), App: svcName, Namespace: svcNs, Owner: owned[svcNs+"/"+svcName],
+				Path: extractPathPrefix(asString(rm["match"])), EntryPoint: ep, TLS: hasTLS,
+				Middlewares: mws, Service: svcName, Port: port, PortName: portName,
+			})
+		}
+	}
+	for e := range eps {
+		info.EntryPoints = append(info.EntryPoints, e)
+	}
+	sort.Strings(info.EntryPoints)
+	sort.Slice(info.Routes, func(i, j int) bool { return info.Routes[i].Path < info.Routes[j].Path })
+
+	if cm, err := co.c.Typed.AppsV1().Deployments("cert-manager").List(ctx, metav1.ListOptions{}); err == nil && len(cm.Items) > 0 {
+		info.TLS = "Let's Encrypt · cert-manager"
+	}
+	if td, err := co.c.Typed.AppsV1().Deployments("kube-system").Get(ctx, "traefik", metav1.GetOptions{}); err == nil {
+		if v := td.Labels["app.kubernetes.io/version"]; v != "" {
+			info.Version = v
+		}
+	}
+	return info, nil
 }
 
 // ingressDetail returns the enriched route targeting the app's service.

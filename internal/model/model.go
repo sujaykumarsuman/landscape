@@ -55,16 +55,23 @@ type Graph struct {
 	Warnings  []string  `json:"warnings,omitempty"`
 }
 
-// Cluster is the node/cluster header info.
+// Cluster is the node/cluster header info + roll-ups for the ribbon and boxes.
 type Cluster struct {
-	Node       string `json:"node"`
-	Version    string `json:"version"`
-	Namespaces int    `json:"namespaces"`
-	Apps       int    `json:"apps"`
-	PodsReady  int    `json:"podsReady"`
-	PodsTotal  int    `json:"podsTotal"`
-	FluxReady  bool   `json:"fluxReady"`
-	FluxMsg    string `json:"fluxMsg,omitempty"`
+	Node       string      `json:"node"`
+	Version    string      `json:"version"`
+	Namespaces int         `json:"namespaces"`
+	Apps       int         `json:"apps"`
+	PodsReady  int         `json:"podsReady"`
+	PodsTotal  int         `json:"podsTotal"`
+	FluxReady  bool        `json:"fluxReady"`
+	FluxMsg    string      `json:"fluxMsg,omitempty"`
+	FluxAgo    string      `json:"fluxAgo,omitempty"`  // "2m ago"
+	NodeCPU    string      `json:"nodeCpu,omitempty"`  // "1 vCPU"
+	NodeMem    string      `json:"nodeMem,omitempty"`  // "3.8 GiB"
+	DiskFree   string      `json:"diskFree,omitempty"` // "42G free"
+	TLS        string      `json:"tls,omitempty"`      // "Let's Encrypt · 78d"
+	NsSummary  []NsSummary `json:"nsSummary,omitempty"`
+	GitOps     GitOpsInfo  `json:"gitops"`
 }
 
 // Metrics is the live-metrics payload.

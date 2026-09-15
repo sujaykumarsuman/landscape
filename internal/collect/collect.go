@@ -137,6 +137,7 @@ func (co *Collector) Graph(ctx context.Context) (*model.Graph, error) {
 		return nil, fmt.Errorf("list deployments: %w", err)
 	}
 	appsSeen := map[string]bool{}
+	ownedNS := map[string]bool{}
 	for i := range deps.Items {
 		d := &deps.Items[i]
 		ns := d.Namespace
@@ -163,13 +164,16 @@ func (co *Collector) Graph(ctx context.Context) (*model.Graph, error) {
 		ready := fmt.Sprintf("%d/%d", d.Status.AvailableReplicas, want)
 
 		appID := "app/" + ns + "/" + name
-		appsSeen[name] = true
+		if owned {
+			appsSeen[name] = true // "apps" counts your applications, not platform tools
+		}
 		appNode := model.Node{
 			ID: appID, Kind: "app", Name: name, Namespace: ns, Layer: model.LayerCluster, App: name, Owner: owned,
 			Status: status, StatusText: "Deployment " + ready,
 			Meta: map[string]string{"image": img.String(), "replicas": ready, "strategy": string(d.Spec.Strategy.Type)},
 		}
 		if owned {
+			ownedNS[ns] = true
 			tag := img.Tag
 			appNode.Summary = fmt.Sprintf("Deployment %s · image %s · deployed by Flux from %s/apps/%s.yaml.", ready, img.String(), infraRepo, name)
 			appNode.Links = ghLinks(img, infraOwner, infraRepo, infraBranch, name)
@@ -232,6 +236,9 @@ func (co *Collector) Graph(ctx context.Context) (*model.Graph, error) {
 		}
 	}
 	g.Cluster.Apps = len(appsSeen)
+
+	// cluster header extras for the boxed map (namespaces, gitops, capacity)
+	co.clusterRollup(ctx, g, ownedNS)
 
 	// flatten + stable order
 	for _, n := range nodes {

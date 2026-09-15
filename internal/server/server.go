@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -44,6 +45,12 @@ type Server struct {
 	graphAt   time.Time
 	metrics   *model.Metrics
 	metricsAt time.Time
+	apps      map[string]appEntry
+}
+
+type appEntry struct {
+	d  *model.AppDetail
+	at time.Time
 }
 
 // New builds a Server.
@@ -51,7 +58,7 @@ func New(col *collect.Collector, opt Options) *Server {
 	if opt.CacheTTL == 0 {
 		opt.CacheTTL = 10 * time.Second
 	}
-	return &Server{opt: opt, col: col, token: sessionToken(opt.AdminPassword)}
+	return &Server{opt: opt, col: col, token: sessionToken(opt.AdminPassword), apps: map[string]appEntry{}}
 }
 
 func sessionToken(pw string) string {
@@ -70,6 +77,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/logout", s.logoutH)
 	mux.HandleFunc("/api/graph", s.requireAuth(s.graphH))
 	mux.HandleFunc("/api/metrics", s.requireAuth(s.metricsH))
+	mux.HandleFunc("GET /api/app/{name}", s.requireAuth(s.appH))
 
 	sub, _ := fs.Sub(webFS, "web")
 	mux.Handle("/", http.FileServer(http.FS(sub)))
@@ -151,6 +159,39 @@ func (s *Server) metricsH(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, m)
+}
+
+func (s *Server) appH(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	d, err := s.getApp(r.Context(), name)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
+}
+
+func (s *Server) getApp(ctx context.Context, name string) (*model.AppDetail, error) {
+	s.mu.Lock()
+	if e, ok := s.apps[name]; ok && time.Since(e.at) < s.opt.CacheTTL {
+		s.mu.Unlock()
+		return e.d, nil
+	}
+	s.mu.Unlock()
+	d, err := s.col.AppDetail(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	// public URL = host of PublicURL + the app's ingress path
+	if d.Owner && d.Ingress != nil && d.Ingress.Path != "" {
+		if u, err := url.Parse(s.opt.PublicURL); err == nil && u.Host != "" {
+			d.PublicURL = u.Scheme + "://" + u.Host + d.Ingress.Path
+		}
+	}
+	s.mu.Lock()
+	s.apps[name] = appEntry{d: d, at: time.Now()}
+	s.mu.Unlock()
+	return d, nil
 }
 
 func (s *Server) getGraph(ctx context.Context) (*model.Graph, error) {

@@ -82,16 +82,18 @@ func (co *Collector) Metrics(ctx context.Context) (*model.Metrics, error) {
 
 	// pod counts (readiness) from the core API
 	if pl, err := co.c.Typed.CoreV1().Pods("").List(ctx, metav1.ListOptions{}); err == nil {
-		m.PodsTotal = len(pl.Items)
 		for i := range pl.Items {
 			p := &pl.Items[i]
-			if p.Status.Phase != "Running" {
-				continue
+			if p.Status.Phase == "Succeeded" {
+				continue // completed Job pods aren't part of the running total
 			}
-			for _, c := range p.Status.Conditions {
-				if c.Type == "Ready" && c.Status == "True" {
-					m.PodsReady++
-					break
+			m.PodsTotal++
+			if p.Status.Phase == "Running" {
+				for _, c := range p.Status.Conditions {
+					if c.Type == "Ready" && c.Status == "True" {
+						m.PodsReady++
+						break
+					}
 				}
 			}
 		}

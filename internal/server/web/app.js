@@ -324,6 +324,7 @@ function renderMap(v) {
     <span class="chip">${c.namespaces || 0} namespaces</span>
     <span class="chip">${c.apps || 0} apps</span>
     <span class="chip">${c.podsReady || 0}/${c.podsTotal || 0} pods running</span>
+    ${c.podsCompleted ? `<span class="chip mono" title="finished Job pods (e.g. k3s Traefik install)">${c.podsCompleted} completed</span>` : ""}
     <span class="chip ${c.fluxReady ? "ok" : "warn"}"><span class="dot ${c.fluxReady ? "s-ok" : "s-progressing"}"></span>Flux ${esc(c.fluxMsg || "")}${c.fluxAgo ? " · " + esc(c.fluxAgo) : ""}</span>
     ${c.tls ? `<span class="chip">TLS · ${esc(c.tls)}</span>` : ""}
     <span class="grow"></span>

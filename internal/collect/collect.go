@@ -236,18 +236,22 @@ func (co *Collector) Graph(ctx context.Context) (*model.Graph, error) {
 		Status: "ok", Summary: "Ingress — terminates TLS (cert-manager) and routes by path to each app.",
 		Links: []model.Link{infraToolDocs["traefik"]}})
 
-	// pod readiness totals
+	// pod readiness totals — completed Job pods (e.g. k3s helm-install-traefik)
+	// are terminal, so keep them out of the running total and count them apart.
 	if pl, err := co.c.Typed.CoreV1().Pods("").List(ctx, metav1.ListOptions{}); err == nil {
-		g.Cluster.PodsTotal = len(pl.Items)
 		for i := range pl.Items {
 			p := &pl.Items[i]
-			if p.Status.Phase != "Running" {
+			if p.Status.Phase == "Succeeded" {
+				g.Cluster.PodsCompleted++
 				continue
 			}
-			for _, c := range p.Status.Conditions {
-				if c.Type == "Ready" && c.Status == "True" {
-					g.Cluster.PodsReady++
-					break
+			g.Cluster.PodsTotal++
+			if p.Status.Phase == "Running" {
+				for _, c := range p.Status.Conditions {
+					if c.Type == "Ready" && c.Status == "True" {
+						g.Cluster.PodsReady++
+						break
+					}
 				}
 			}
 		}

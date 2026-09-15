@@ -14,6 +14,8 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"path"
+	"strings"
 	"sync"
 	"time"
 
@@ -82,9 +84,36 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/app/{name}", s.requireAuth(s.appH))
 	mux.HandleFunc("/api/traefik", s.requireAuth(s.traefikH))
 
-	sub, _ := fs.Sub(webFS, "web")
-	mux.Handle("/", http.FileServer(http.FS(sub)))
+	mux.Handle("/", s.staticHandler())
 	return logMW(mux)
+}
+
+// staticHandler serves the embedded UI and, for unknown non-API paths, falls
+// back to index.html so the client-side router can handle deep-links like
+// /landscape/<app> or /landscape/metrics (a single-page app served under a path
+// prefix). Real assets (app.js, style.css) are served as files; unknown /api/*
+// paths 404 rather than returning the shell.
+func (s *Server) staticHandler() http.Handler {
+	sub, _ := fs.Sub(webFS, "web")
+	fileSrv := http.FileServer(http.FS(sub))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		clean := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
+		if clean == "api" || strings.HasPrefix(clean, "api/") {
+			http.NotFound(w, r)
+			return
+		}
+		if clean != "" {
+			if f, err := sub.Open(clean); err == nil {
+				_ = f.Close()
+				fileSrv.ServeHTTP(w, r) // a real embedded asset
+				return
+			}
+			// a client-side route (e.g. /airlift, /metrics): serve the shell
+			r = r.Clone(r.Context())
+			r.URL.Path = "/"
+		}
+		fileSrv.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) adminEnabled() bool { return s.opt.AdminPassword != "" }

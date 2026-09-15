@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -50,10 +51,16 @@ type Server struct {
 	apps      map[string]appEntry
 	traefik   *model.TraefikInfo
 	traefikAt time.Time
+	misc      map[string]cacheEntry // events / per-app events, keyed by query
 }
 
 type appEntry struct {
 	d  *model.AppDetail
+	at time.Time
+}
+
+type cacheEntry struct {
+	v  any
 	at time.Time
 }
 
@@ -62,7 +69,8 @@ func New(col *collect.Collector, opt Options) *Server {
 	if opt.CacheTTL == 0 {
 		opt.CacheTTL = 10 * time.Second
 	}
-	return &Server{opt: opt, col: col, token: sessionToken(opt.AdminPassword), apps: map[string]appEntry{}}
+	return &Server{opt: opt, col: col, token: sessionToken(opt.AdminPassword),
+		apps: map[string]appEntry{}, misc: map[string]cacheEntry{}}
 }
 
 func sessionToken(pw string) string {
@@ -82,6 +90,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/graph", s.requireAuth(s.graphH))
 	mux.HandleFunc("/api/metrics", s.requireAuth(s.metricsH))
 	mux.HandleFunc("GET /api/app/{name}", s.requireAuth(s.appH))
+	mux.HandleFunc("GET /api/app/{name}/events", s.requireAuth(s.appEventsH))
+	mux.HandleFunc("GET /api/app/{name}/logs", s.requireAuth(s.appLogsH))
+	mux.HandleFunc("GET /api/events", s.requireAuth(s.eventsH))
 	mux.HandleFunc("/api/traefik", s.requireAuth(s.traefikH))
 
 	mux.Handle("/", s.staticHandler())
@@ -256,6 +267,79 @@ func (s *Server) getTraefik(ctx context.Context) (*model.TraefikInfo, error) {
 	s.traefik, s.traefikAt = t, time.Now()
 	s.mu.Unlock()
 	return t, nil
+}
+
+// eventsH serves the combined events browser with ns/type/kind/text filters.
+func (s *Server) eventsH(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	f := collect.EventFilter{
+		Namespace: q.Get("ns"),
+		Type:      q.Get("type"),
+		Kind:      q.Get("kind"),
+		Query:     q.Get("q"),
+		Limit:     atoiDefault(q.Get("limit"), 200),
+	}
+	s.cachedJSON(w, r, "events?"+r.URL.RawQuery, func(ctx context.Context) (any, error) {
+		return s.col.Events(ctx, f)
+	})
+}
+
+// appEventsH serves the events involving one app's workloads.
+func (s *Server) appEventsH(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	s.cachedJSON(w, r, "appevents:"+name, func(ctx context.Context) (any, error) {
+		return s.col.AppEvents(ctx, name)
+	})
+}
+
+// appLogsH tails a pod's stdout (never cached — always a fresh tail).
+func (s *Server) appLogsH(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	q := r.URL.Query()
+	opts := collect.LogOptions{
+		Pod:       q.Get("pod"),
+		Container: q.Get("container"),
+		Tail:      int64(atoiDefault(q.Get("tail"), 500)),
+		Since:     int64(atoiDefault(q.Get("since"), 0)),
+	}
+	l, err := s.col.AppLogs(r.Context(), name, opts)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, l)
+}
+
+// cachedJSON answers from a small per-key cache within CacheTTL, else builds and
+// stores. Used for the (cheap but pollable) events reads.
+func (s *Server) cachedJSON(w http.ResponseWriter, r *http.Request, key string, build func(context.Context) (any, error)) {
+	s.mu.Lock()
+	if e, ok := s.misc[key]; ok && time.Since(e.at) < s.opt.CacheTTL {
+		v := e.v
+		s.mu.Unlock()
+		writeJSON(w, http.StatusOK, v)
+		return
+	}
+	s.mu.Unlock()
+	v, err := build(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+		return
+	}
+	s.mu.Lock()
+	s.misc[key] = cacheEntry{v: v, at: time.Now()}
+	s.mu.Unlock()
+	writeJSON(w, http.StatusOK, v)
+}
+
+func atoiDefault(s string, def int) int {
+	if s == "" {
+		return def
+	}
+	if n, err := strconv.Atoi(s); err == nil {
+		return n
+	}
+	return def
 }
 
 func (s *Server) getGraph(ctx context.Context) (*model.Graph, error) {

@@ -75,8 +75,9 @@ func (co *Collector) Metrics(ctx context.Context) (*model.Metrics, error) {
 	}
 	sort.Slice(m.Namespaces, func(i, j int) bool { return m.Namespaces[i].MemBytes > m.Namespaces[j].MemBytes })
 	sort.Slice(m.Pods, func(i, j int) bool { return m.Pods[i].MemBytes > m.Pods[j].MemBytes })
-	if len(m.Pods) > 8 {
-		m.Pods = m.Pods[:8]
+	// keep a bounded set; the Metrics tab sorts/filters this client-side
+	if len(m.Pods) > 50 {
+		m.Pods = m.Pods[:50]
 	}
 
 	// pod counts (readiness) from the core API

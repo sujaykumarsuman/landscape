@@ -47,7 +47,17 @@ The read side. A `Collector{c *kube.Clients, githubOwner}`.
   mapping with entrypoints/TLS/middlewares/port, owner flag, and namespace
   (honouring cross-namespace `services[].namespace` and named string ports).
 - `Metrics(ctx) *model.Metrics` (`metrics.go`): node + per-namespace + top-pod
-  usage from metrics-server, plus pod readiness counts.
+  usage from metrics-server, plus pod readiness counts (returns up to 50 pods so
+  the Metrics tab can sort/filter client-side).
+- `events.go` — the observability reads (all read-only): `Events(ctx, filter)`
+  lists cluster Events (all namespaces, then ns/type/kind/text filters in memory,
+  newest-first, capped); `AppEvents(ctx, name)` keeps the Events whose
+  involvedObject is the app's Deployment/ReplicaSet(s)/Pods/Service/IngressRoute
+  (same instance-label ownership as `AppDetail`); `AppLogs(ctx, name, opts)` tails
+  a pod's stdout via `pods/log` (`GetLogs(...).DoRaw`, container picker,
+  `TailLines` capped 500…5000). Event timestamps tolerate both classic
+  (`first/lastTimestamp`) and series/`eventTime` shapes; `relAgeTime` is shared
+  with `relAge`.
 - `links.go`: `parseImage`, `parseGitURL`, `ghLinks` (Source/Workflow/Image/
   Config deep-links), and the infra-tool docs map. Helpers `kustURL`/`trimPath`
   build the repo-folder links for kustomizations.
@@ -64,37 +74,60 @@ Plain JSON structs the UI consumes. `model.go`: `Graph`, `Node`, `Edge`,
 `Cluster` (+ `NsSummary`, `GitOpsInfo`), `Metrics`. `app.go`: `AppDetail` and its
 detail types (`DeploymentDetail`, `ReplicaSetDetail`, `PodDetail`,
 `ServiceDetail`, `IngressDetail`, `RefName`, `AppGitOps`, `HRDetail`,
-`KustDetail`), `TraefikInfo`/`TraefikRoute`.
+`KustDetail`), `TraefikInfo`/`TraefikRoute`. `events.go`: `Event`, `EventList`
+(events-browser payload, carrying the ~1h retention `Window` note) and `Logs` (a
+tail of pod stdout — lines + container/pod pickers).
 
 ### `internal/server`
 `Options{Addr, AdminPassword, GithubOwner, PublicURL, Version, CacheTTL}`.
-`Handler()` wires routes; the embedded `web/` FS serves `/`. Auth: `authed(r)`
-constant-time-compares the `ls_session` cookie against `sessionToken(pw)` =
+`Handler()` wires routes; `staticHandler()` serves the embedded `web/` FS and
+falls back to `index.html` for unknown non-API paths so the client-side router
+handles deep-links (`/landscape/<app>`, `/landscape/metrics`…); real assets serve
+as files and unknown `/api/*` paths 404. Auth: `authed(r)` constant-time-compares
+the `ls_session` cookie against `sessionToken(pw)` =
 `HMAC-SHA256("landscape-session/"+pw, "v1")` (deterministic ⇒ survives restarts;
-12 h cookie). Each read endpoint has a small `s.mu`-guarded cache with `CacheTTL`
-(default 10 s): `graph`, `metrics`, `apps[name]`, `traefik`. `PublicURL`'s host is
-used to fill per-route/app public URLs.
+12 h cookie). Read endpoints have small `s.mu`-guarded caches with `CacheTTL`
+(default 10 s): `graph`, `metrics`, `apps[name]`, `traefik`, and a keyed `misc`
+cache for `events` / per-app events. Logs are **not** cached (each request is a
+fresh tail). `PublicURL`'s host fills per-route/app public URLs.
 
 ### `internal/server/web`
 The UI, embedded via `//go:embed web`. `index.html` = shell + login. `style.css`
 = one dark theme (tokens at `:root`; responsive: 4 lanes → stacked at 1080px,
 top bar compacts at 640px, `#view` is `overflow-x:hidden`). `app.js` (vanilla,
-no deps) = auth flow, a 15 s poll, and the render functions per view:
+no deps) = auth flow, a History-API router, an adjustable poll (default 15 s), and
+the render functions per view:
+- A **client-side router** gives each view a real URL under the mount prefix:
+  `routeFromURL`/`pathFor`/`currentBase` map the path (dirname = base) to a view,
+  `navigate` pushes history on nav, and `popstate` syncs back/forward. Reserved
+  words `metrics`/`events`/`traefik`; everything else is an app.
 - `renderMap` — the 4 boxed lanes + flow-gap arrows + cluster box; `wireMap`
   binds hover-trace + pin + Traefik-rail click; `applyTrace`/`pinApp`/`unpin`.
-- `renderApp` — the full-page component graph (`appGraphHTML` columns +
-  `drawAppEdges`) and right rail (`appRailHTML`).
+- `renderApp` — header with interactive **Graph / Events / Logs** tabs
+  (`state.appTab`, fetched on switch + polled while active, header + right rail
+  kept), the component graph (`appGraphHTML` + `drawAppEdges`), the per-app events
+  list (`appEventsHTML`), and the logs viewer (`appLogsHTML`: container/tail
+  pickers, refresh, fixed-height mono scroller tailing to the newest line,
+  warn/error emphasis).
 - `renderTraefik` — the routing page (Traefik node → route cards +
   `drawTraefikEdges`).
-- `renderMetrics`, `renderEvents` (placeholder).
+- `renderMetrics` — gauges + bars with a toolbar: namespace filter, sort
+  (memory/cpu/name), and a refresh-interval / pause control (`setPoll`).
+- `renderEvents` — the combined events browser: namespace/type/kind filter chips
+  + debounced free-text search + a capped scrollable list (`eventsListHTML` is
+  shared with the app-detail Events tab).
+- A top-right menu (next to the profile) jumps to the combined browser / recent
+  warnings, keyboard-accessible (`wireMenu`).
 - SVG edges are computed from DOM rects and redrawn on resize; `anchor(a,b)`
   picks vertical/horizontal attachment points.
 
 ## Data flow & caching
-Browser polls `/api/graph` + `/api/metrics` (map/metrics), or
-`/api/app/{name}` + `/api/metrics` (app), or `/api/traefik` + `/api/metrics`
-(traefik). The server answers from cache within `CacheTTL`, else rebuilds from
-the cluster. The first request after start is a cold build (~2–3 s).
+Browser polls `/api/graph` + `/api/metrics` (map/metrics), `/api/app/{name}`
+(+ `/api/app/{name}/events` or `/logs` when that tab is active) + `/api/metrics`
+(app), `/api/traefik` + `/api/metrics` (traefik), or `/api/events` + `/api/metrics`
+(combined events). The server answers from cache within `CacheTTL`, else rebuilds
+from the cluster (logs excepted — always a fresh tail). The first request after
+start is a cold build (~2–3 s).
 
 ## Deploy shape
 Multi-stage `Dockerfile` → distroless static image. `apps/landscape.yaml` in the

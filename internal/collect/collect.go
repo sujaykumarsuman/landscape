@@ -34,6 +34,15 @@ var (
 	gvrIngressRoute  = schema.GroupVersionResource{Group: "traefik.io", Version: "v1alpha1", Resource: "ingressroutes"}
 )
 
+// kustNote is a one-line description of what each Flux Kustomization applies, for
+// the map hover card; unknown names fall back to a generic line.
+var kustNote = map[string]string{
+	"flux-system":       "Flux's own components and the sync of the infra repo (bootstrap).",
+	"infra-controllers": "Cluster controllers — cert-manager and its Helm repository.",
+	"infra-configs":     "Cluster config — Let's Encrypt issuers, the shared TLS store, Traefik config, namespaces.",
+	"apps":              "The application HelmReleases (airlift, landscape, projects-hub) via the shared chart.",
+}
+
 // Graph builds the full landscape.
 func (co *Collector) Graph(ctx context.Context) (*model.Graph, error) {
 	g := &model.Graph{UpdatedAt: time.Now()}
@@ -77,8 +86,12 @@ func (co *Collector) Graph(ctx context.Context) (*model.Graph, error) {
 				{Type: "workflow", URL: "https://github.com/" + co.githubOwner + "/.github/blob/main/.github/workflows/build-push.yml", Label: "build-push.yml"}}})
 	}
 	// shared build node
-	add(model.Node{ID: "actions", Kind: "actions", Name: "GitHub Actions", Layer: model.LayerBuild, Owner: true, Status: "ok",
-		Summary: "Builds each project's image and pushes it to GHCR on a release tag / push."})
+	actions := model.Node{ID: "actions", Kind: "actions", Name: "GitHub Actions", Layer: model.LayerBuild, Owner: false, Status: "ok",
+		Summary: "Builds each project's image and pushes it to GHCR on a release tag / push, via the reusable build-push workflow."}
+	if co.githubOwner != "" {
+		actions.Links = []model.Link{{Type: "workflow", URL: "https://github.com/" + co.githubOwner + "/.github/blob/main/.github/workflows/build-push.yml", Label: "build-push.yml"}}
+	}
+	add(actions)
 
 	// --- Flux objects ---
 	fluxReady := true
@@ -95,8 +108,12 @@ func (co *Collector) Graph(ctx context.Context) (*model.Graph, error) {
 			if st != "ok" {
 				fluxReady = false
 			}
+			summary := kustNote[name]
+			if summary == "" {
+				summary = "Flux Kustomization — applies a folder of the infra repo."
+			}
 			add(model.Node{ID: "kust/" + name, Kind: "kustomization", Name: name, Namespace: k.GetNamespace(), Layer: model.LayerGitOps,
-				Owner: false, Status: st, StatusText: msg, Summary: "Flux Kustomization — applies a folder of the infra repo."})
+				Owner: false, Status: st, StatusText: msg, Summary: summary})
 			edge("flux", "kust/"+name, "owns", "")
 		}
 	} else {
@@ -183,7 +200,7 @@ func (co *Collector) Graph(ctx context.Context) (*model.Graph, error) {
 			// source + image + build nodes
 			add(model.Node{ID: "repo/" + img.Repo, Kind: "repo", Name: img.Owner + "/" + img.Repo, Layer: model.LayerSource, App: name, Owner: true,
 				Status: "ok", Summary: "Application source.",
-				Links: []model.Link{{Type: "source", URL: "https://github.com/" + img.Owner + "/" + img.Repo, Label: img.Owner + "/" + img.Repo}}})
+				Links: []model.Link{sourceLink(img)}})
 			add(model.Node{ID: "image/" + img.Repo, Kind: "image", Name: img.Repo + ":" + tag, Namespace: "ghcr.io", Layer: model.LayerBuild, App: name, Owner: true,
 				Status: "ok", Summary: "Container image on GHCR (public).",
 				Links: []model.Link{{Type: "image", URL: "https://github.com/" + img.Owner + "/" + img.Repo + "/pkgs/container/" + img.Repo, Label: "ghcr · " + img.Repo}}})

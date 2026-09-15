@@ -88,6 +88,20 @@ func sourceRepo(img imageRef) repoRef {
 	return repoRef{Owner: img.Owner, Repo: img.Repo}
 }
 
+// sourceLink is the "source" deep-link for an image, resolved through sourceRepo
+// so images built from a different repo (e.g. projects-hub, built from
+// sujaykumarsuman.github.io/projects) link to the right place, not a 404.
+func sourceLink(img imageRef) model.Link {
+	src := sourceRepo(img)
+	url := "https://github.com/" + src.Owner + "/" + src.Repo
+	label := src.Owner + "/" + src.Repo
+	if src.Subdir != "" {
+		url += "/tree/main/" + src.Subdir
+		label += "/" + src.Subdir
+	}
+	return model.Link{Type: "source", URL: url, Label: label}
+}
+
 // ghLinks builds the deep-links for an owned app image plus its GitOps config.
 func ghLinks(img imageRef, infraOwner, infraRepo, infraBranch, app string) []model.Link {
 	if infraBranch == "" {
@@ -99,13 +113,8 @@ func ghLinks(img imageRef, infraOwner, infraRepo, infraBranch, app string) []mod
 		// GHCR package still resolves under the source repo's path.
 		src := sourceRepo(img)
 		base := "https://github.com/" + src.Owner + "/" + src.Repo
-		sourceURL, sourceLabel := base, src.Owner+"/"+src.Repo
-		if src.Subdir != "" {
-			sourceURL += "/tree/main/" + src.Subdir
-			sourceLabel += "/" + src.Subdir
-		}
 		out = append(out,
-			model.Link{Type: "source", URL: sourceURL, Label: sourceLabel},
+			sourceLink(img),
 			model.Link{Type: "workflow", URL: base + "/blob/main/.github/workflows/deploy.yml", Label: "deploy.yml"},
 			model.Link{Type: "image", URL: base + "/pkgs/container/" + img.Repo, Label: "ghcr · " + img.Repo},
 		)

@@ -6,7 +6,7 @@ const api = (p, o) => fetch("./api" + p, Object.assign({ headers: { "Content-Typ
 const cls = (st) => st === "ok" ? "ok" : st === "failed" ? "err" : "warn";
 
 const state = {
-  graph: null, metrics: null, view: "map", appName: null, app: null, traefik: null, pin: null,
+  graph: null, metrics: null, view: "map", appName: null, app: null, traefik: null, storage: null, pin: null,
   appTab: "graph", appEvents: null, appError: null, logs: null, events: null,
   eventsFilter: { ns: "", type: "", kind: "", q: "" },
   logsCtl: { container: "", tail: 500 },
@@ -80,7 +80,7 @@ async function startApp() {
    real URL: the map at the mount root, apps at …/<app>, and the reserved words
    metrics|events|traefik at …/<word>. The base is the mount path (dirname of the
    current pathname), so links stay prefix-agnostic and work in local dev too. */
-const RESERVED = { metrics: 1, events: 1, traefik: 1 };
+const RESERVED = { metrics: 1, events: 1, traefik: 1, storage: 1 };
 function currentBase() { const p = location.pathname; return p.slice(0, p.lastIndexOf("/") + 1); }
 function pathFor(view, appName) {
   const b = currentBase();
@@ -92,7 +92,7 @@ function routeState() { return { view: state.view, appName: state.appName }; }
 function routeFromURL() {
   const p = location.pathname;
   const seg = decodeURIComponent(p.slice(p.lastIndexOf("/") + 1));
-  if (seg === "metrics" || seg === "events" || seg === "traefik") return { view: seg, appName: null };
+  if (seg === "metrics" || seg === "events" || seg === "traefik" || seg === "storage") return { view: seg, appName: null };
   if (seg === "") return { view: "map", appName: null };
   return { view: "app", appName: seg };
 }
@@ -103,6 +103,7 @@ function applyRoute(view, appName) {
   state.app = null;
   state.appError = null;
   state.traefik = null;
+  state.storage = null;
   state.appTab = "graph";
   state.appEvents = null;
   state.logs = null;
@@ -188,6 +189,9 @@ async function refresh() {
     } else if (state.view === "traefik") {
       calls.push(["traefik", api("/traefik")]);
       if (!state.graph) calls.push(["graph", api("/graph")]);
+    } else if (state.view === "storage") {
+      calls.push(["storage", api("/storage")]);
+      if (!state.graph) calls.push(["graph", api("/graph")]);
     } else if (state.view === "events") {
       calls.push(["events", api("/events" + eventsQuery())]);
       if (!state.graph) calls.push(["graph", api("/graph")]);
@@ -210,6 +214,7 @@ async function refresh() {
       else { state.app = null; state.appError = R.app.status === 404 ? "notfound" : "error"; }
     }
     if (R.traefik && P.traefik) state.traefik = P.traefik;
+    if (R.storage) state.storage = P.storage || { error: true };
     if (R.ev) state.appEvents = P.ev || { error: true };
     if (R.logs) state.logs = P.logs || { error: true };
     if (R.events) state.events = P.events || { error: true };
@@ -286,6 +291,7 @@ function render() {
   const v = $("#view");
   if (state.view === "events") return renderEvents(v);
   if (state.view === "traefik") return renderTraefik(v);
+  if (state.view === "storage") return renderStorage(v);
   if (state.view === "app") return renderApp(v);
   if (state.view === "metrics") { if (!state.graph) { v.innerHTML = loading(); return; } return renderMetrics(v); }
   if (!state.graph) { v.innerHTML = loading(); return; }
@@ -399,7 +405,7 @@ function renderMap(v) {
       <div class="clustercol">
         <div class="nsrow hscroll">${nsBoxes}</div>
         <div class="platform-box"><span class="kind" style="color:var(--dim)">platform namespaces</span><div class="platform-grid hscroll">${platCards}</div></div>
-        <div class="footer-note">${icon("clock", 13, "#616b7a")} local-path PVCs · memory-only sessions · data wiped on start</div>
+        <div class="footer-note" id="storagelink" style="cursor:pointer" title="Open the storage view">${icon("clock", 13, "#616b7a")} Longhorn + local-path PVCs · CloudNativePG Postgres · airlift sessions ephemeral</div>
       </div>
     </div></div>`;
 
@@ -468,6 +474,7 @@ function legendHTML() {
    highlight (hides the hover card so the whole flow stays visible) */
 function wireMap(byId) {
   const map = $(".map");
+  { const sl = $("#storagelink"); if (sl) sl.onclick = () => setView("storage"); }
   $$(".map [data-id]").forEach(el => {
     const node = byId[el.dataset.id];
     const app = el.dataset.app;
@@ -1003,6 +1010,65 @@ function renderTraefik(v) {
 
   $$("#tfwrap .troute.owner").forEach(el => el.addEventListener("click", () => openApp(el.dataset.appname)));
   requestAnimationFrame(drawTraefikEdges);
+}
+
+/* ---------- STORAGE ---------- */
+function renderStorage(v) {
+  const s = state.storage;
+  if (!s) { v.innerHTML = `<div class="warn">loading storage…</div>`; return; }
+  if (s.error) { v.innerHTML = errBox("Storage unavailable", "The API returned an error."); return; }
+  const classes = s.classes || [], pvcs = s.pvcs || [];
+  const bound = pvcs.filter(p => p.status === "Bound").length;
+
+  const band = `<div class="appband">
+    <div class="tile">${icon("pvc", 22, "#35d0c0")}</div>
+    <div>
+      <div class="titlerow"><h1>Storage</h1>
+        <span class="badge ok"><span class="dot s-ok"></span>persistent</span></div>
+      <div class="meta">${esc((classes.length ? classes.length + " storage classes · " : "") + pvcs.length + " PVCs" + (pvcs.length ? " · " + bound + " bound" : ""))}</div>
+    </div>
+    <span class="grow"></span>
+  </div>`;
+
+  let scBody;
+  if (s.classesForbidden) {
+    scBody = errBox("StorageClasses hidden", "The console lacks the storage.k8s.io/storageclasses list grant. PVCs are shown below.");
+  } else if (!classes.length) {
+    scBody = `<div class="stmut mono">no storage classes</div>`;
+  } else {
+    scBody = `<div class="scgrid">` + classes.map(sc => `
+      <div class="card sc">
+        <div class="row1"><span class="dot ${sc.default ? "s-ok" : "s-unknown"}"></span>
+          <span class="nm mono">${esc(sc.name)}</span>
+          ${sc.default ? `<span class="chip xs ok">default</span>` : ""}</div>
+        <div class="sub">${esc(sc.provisioner || "")}</div>
+        <div class="scmeta mono">reclaim ${esc(sc.reclaimPolicy || "—")}${sc.volumeBindingMode ? " · " + esc(sc.volumeBindingMode) : ""}</div>
+      </div>`).join("") + `</div>`;
+  }
+
+  let pvcBody;
+  if (!pvcs.length) {
+    pvcBody = `<div class="stmut mono">no persistent volume claims</div>`;
+  } else {
+    pvcBody = `<div class="dtwrap"><table class="dtable"><thead><tr>
+        <th>Namespace</th><th>Name</th><th>Storage class</th><th>Capacity</th><th>Access</th><th>Status</th>
+      </tr></thead><tbody>` + pvcs.map(p => {
+      const d = p.status === "Bound" ? "s-ok" : (p.status === "Lost" || p.status === "Failed") ? "s-failed" : "s-progressing";
+      return `<tr>
+          <td class="mono">${esc(p.namespace)}</td>
+          <td class="mono">${esc(p.name)}</td>
+          <td class="mono">${esc(p.storageClass || "—")}</td>
+          <td class="mono">${esc(p.capacity || "—")}</td>
+          <td class="mono">${esc(p.accessMode || "—")}</td>
+          <td><span class="pvcst"><span class="dot ${d}"></span>${esc(p.status || "—")}</span></td>
+        </tr>`;
+    }).join("") + `</tbody></table></div>`;
+  }
+
+  v.innerHTML = band + `<div class="stpage">
+    <div class="stsec">StorageClasses</div>${scBody}
+    <div class="stsec">PersistentVolumeClaims</div>${pvcBody}
+  </div>`;
 }
 function drawTraefikEdges() {
   const wrap = $("#tfwrap"), svg = $("#tfedges");

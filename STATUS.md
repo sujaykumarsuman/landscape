@@ -1,10 +1,10 @@
 # STATUS
 
-_Last updated: 2026-09-15 (v0.4.0)._
+_Last updated: 2026-09-16 (v0.6.0)._
 
 ## Live
 
-- **v0.4.0** at https://projects.sujaykumar.dev/landscape, deployed by GitOps
+- **v0.6.0** at https://projects.sujaykumar.dev/landscape, deployed by GitOps
   (Flux + Helm from `sujaykumarsuman/infra`, `apps/landscape.yaml`).
 - Read-only ClusterRole (see the invariant in `CLAUDE.md`). Admin-password gated
   (SOPS secret `landscape-admin`).
@@ -28,23 +28,20 @@ _Last updated: 2026-09-15 (v0.4.0)._
   reveals an explainer bubble when a flow is pinned; kustomization cards link to
   the exact repo folder each one applies; the hover card is reachable so its
   deep-links are clickable; Flux version label fixed (`v2.9.5`).
-
-## In progress (branches — verified locally, pending review + deploy)
-
-- **Per-app URL routing** (`feat/app-routes`): each view has a real URL under the
-  mount prefix — the map at the root, apps at `…/<app>`, and
-  `metrics`/`events`/`traefik` at `…/<word>`. Server SPA-fallback +
-  History-API router (deep-links, reload, back/forward). No RBAC change.
-- **Observability** (`feat/observability`, see
-  `docs/prompts/002-events-logs-metrics.md`): per-app **Events** tab, a combined
-  **Events browser** (nav tab) with namespace/type/kind filters + search, a
-  **Logs viewer** (app Logs tab, tail-on-demand), a top-right events/warnings
-  **menu**, and **Metrics controls** (namespace filter, sort, refresh/pause). All
-  read-only and verified in-browser (desktop + phone) against the live cluster.
-  - **Requires an infra change first** (`sujaykumarsuman/infra`): RBAC adds core
-    `events` (get,list) + `pods/log` (get) in `apps/landscape.yaml`; still no
-    `secrets`/`configmaps`/write verbs (invariant holds). Ship the RBAC before/
-    with the tag or the new endpoints 403 (the UI degrades gracefully).
+- **v0.5.0** — **per-app URL routing** (History-API router + server SPA-fallback:
+  map at the root, apps at `…/<app>`, `metrics`/`events`/`traefik` at `…/<word>`;
+  deep-links, reload, back/forward); **observability** — per-app **Events** tab, a
+  combined **Events browser** (namespace/type/kind filters + search), a **Logs
+  viewer** (tail-on-demand), an events/warnings menu, and **Metrics controls**
+  (namespace filter, sort, refresh/pause). RBAC gained core `events` (get,list) +
+  `pods/log` (get), read-only.
+- **v0.5.1** — fix: projects-hub deep-links point at its real source repo.
+- **v0.5.2** — richer map hover cards; projects-hub source-link fix in the map.
+- **v0.5.3** — keep completed Job pods out of the running-pod total.
+- **v0.6.0** — **Storage view** (`GET /api/storage`, nav tab): the cluster's
+  StorageClasses and PVCs across namespaces, read live; reworded the map footer to
+  reflect the whole platform (Longhorn + local-path PVCs · CloudNativePG Postgres).
+  RBAC gained `storage.k8s.io/storageclasses` (get,list), read-only.
 
 ## Later
 

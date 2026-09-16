@@ -19,10 +19,11 @@ It reads resource metadata/specs only. ConfigMap/Secret/PVC **names** shown on
 the app page are derived from the Deployment pod spec
 (`envFrom`/`env.valueFrom`/`volumes`/`imagePullSecrets`) — never by reading the
 objects' data. The SOPS badge is inferred from the owning Kustomization's
-`spec.decryption.provider == sops`. The ClusterRole grants only `get,list` on:
-core `nodes,namespaces,pods,services,persistentvolumeclaims`; apps
-`deployments,replicasets`; `metrics.k8s.io`; the Flux CRD groups; and
-`traefik.io ingressroutes`. **No `secrets`, no `configmaps`, no write verbs.**
+`spec.decryption.provider == sops`. The ClusterRole grants only read verbs:
+`get,list` on core `nodes,namespaces,pods,services,persistentvolumeclaims,events`,
+apps `deployments,replicasets`, `metrics.k8s.io`, `storage.k8s.io storageclasses`,
+the Flux CRD groups, and `traefik.io ingressroutes`; plus `get` on core
+`pods/log`. **No `secrets`, no `configmaps`, no write verbs.**
 Any new collector read must fit this set — if a feature needs a new
 resource/verb, add it to `apps/landscape.yaml` in the infra repo (chart
 `project`'s `rbac.clusterRole.rules`) and call it out in the PR.

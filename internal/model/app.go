@@ -143,3 +143,36 @@ type TraefikRoute struct {
 	PortName    string   `json:"portName,omitempty"` // named (string) target port
 	PublicURL   string   `json:"publicUrl,omitempty"`
 }
+
+// StorageInfo drives the Storage view: the cluster's StorageClasses and PVCs.
+// StorageClasses are best-effort — the storage.k8s.io grant may be absent — so
+// ClassesForbidden/Warnings report a degraded read while PVCs still populate.
+type StorageInfo struct {
+	UpdatedAt        time.Time      `json:"updatedAt"`
+	Classes          []StorageClass `json:"classes,omitempty"`
+	ClassesForbidden bool           `json:"classesForbidden,omitempty"`
+	PVCs             []PVCInfo      `json:"pvcs"`
+	Warnings         []string       `json:"warnings,omitempty"`
+}
+
+// StorageClass is one cluster StorageClass. Default is derived from the
+// is-default-class annotation, not a struct field.
+type StorageClass struct {
+	Name              string `json:"name"`
+	Provisioner       string `json:"provisioner"`
+	Default           bool   `json:"default"`
+	ReclaimPolicy     string `json:"reclaimPolicy,omitempty"`
+	VolumeBindingMode string `json:"volumeBindingMode,omitempty"`
+}
+
+// PVCInfo is one PersistentVolumeClaim across all namespaces. Only metadata/spec/
+// status are read — never the bound data.
+type PVCInfo struct {
+	Namespace    string `json:"namespace"`
+	Name         string `json:"name"`
+	StorageClass string `json:"storageClass,omitempty"`
+	Capacity     string `json:"capacity,omitempty"` // bound size (Status.Capacity), else request
+	Status       string `json:"status"`             // Bound|Pending|Lost
+	Volume       string `json:"volume,omitempty"`
+	AccessMode   string `json:"accessMode,omitempty"`
+}

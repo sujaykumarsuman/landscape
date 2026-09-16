@@ -362,3 +362,21 @@ button{font-family:var(--sans)}
   .grid{grid-template-columns:1fr}
   .mcard.wide{grid-column:span 1}
 }
+
+/* ---------- storage view ---------- */
+.stpage{padding:18px 20px;display:flex;flex-direction:column;gap:12px}
+.stsec{font-size:10px;letter-spacing:.6px;text-transform:uppercase;color:var(--mut);margin-top:6px}
+.stmut{color:var(--mut);padding:4px 2px}
+.scgrid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
+.card.sc{padding:12px 13px}
+.card.sc .row1{display:flex;align-items:center;gap:8px}
+.card.sc .nm{font-size:12.5px}
+.card.sc .sub{font-family:var(--mono);font-size:11px;color:var(--dim);margin-top:5px;overflow-wrap:anywhere}
+.card.sc .scmeta{font-size:10.5px;color:var(--mut);margin-top:4px}
+.dtwrap{overflow-x:auto}
+.dtable{width:100%;border-collapse:collapse;font-size:12.5px;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.dtable th{text-align:left;font-weight:500;color:var(--dim);font-size:11px;padding:8px 12px;border-bottom:1px solid var(--line);background:var(--panel)}
+.dtable td{padding:9px 12px;border-bottom:1px solid var(--line)}
+.dtable tr:last-child td{border-bottom:none}
+.dtable tbody tr:hover{background:var(--panel2)}
+.pvcst{display:inline-flex;align-items:center;gap:6px;font-size:11.5px}

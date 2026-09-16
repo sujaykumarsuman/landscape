@@ -51,6 +51,8 @@ type Server struct {
 	apps      map[string]appEntry
 	traefik   *model.TraefikInfo
 	traefikAt time.Time
+	storage   *model.StorageInfo
+	storageAt time.Time
 	misc      map[string]cacheEntry // events / per-app events, keyed by query
 }
 
@@ -94,6 +96,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/app/{name}/logs", s.requireAuth(s.appLogsH))
 	mux.HandleFunc("GET /api/events", s.requireAuth(s.eventsH))
 	mux.HandleFunc("/api/traefik", s.requireAuth(s.traefikH))
+	mux.HandleFunc("/api/storage", s.requireAuth(s.storageH))
 
 	mux.Handle("/", s.staticHandler())
 	return logMW(mux)
@@ -267,6 +270,33 @@ func (s *Server) getTraefik(ctx context.Context) (*model.TraefikInfo, error) {
 	s.traefik, s.traefikAt = t, time.Now()
 	s.mu.Unlock()
 	return t, nil
+}
+
+func (s *Server) storageH(w http.ResponseWriter, r *http.Request) {
+	st, err := s.getStorage(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
+func (s *Server) getStorage(ctx context.Context) (*model.StorageInfo, error) {
+	s.mu.Lock()
+	if s.storage != nil && time.Since(s.storageAt) < s.opt.CacheTTL {
+		st := s.storage
+		s.mu.Unlock()
+		return st, nil
+	}
+	s.mu.Unlock()
+	st, err := s.col.Storage(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	s.storage, s.storageAt = st, time.Now()
+	s.mu.Unlock()
+	return st, nil
 }
 
 // eventsH serves the combined events browser with ns/type/kind/text filters.

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -81,6 +82,7 @@ func (co *Collector) AppDetail(ctx context.Context, name string) (*model.AppDeta
 	cms := map[string]string{}
 	secs := map[string]string{}
 	pvcs := map[string]string{}
+	var pgHost, pgDB string // external Postgres dependency, from plain env
 	ps := d.Spec.Template.Spec
 	for _, c := range ps.Containers {
 		for _, ef := range c.EnvFrom {
@@ -97,6 +99,16 @@ func (co *Collector) AppDetail(ctx context.Context, name string) (*model.AppDeta
 			}
 			if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
 				secs[e.ValueFrom.SecretKeyRef.Name] = "env:" + e.Name
+			}
+			switch e.Name {
+			case "PGHOST":
+				if e.Value != "" {
+					pgHost = e.Value
+				}
+			case "PGDATABASE":
+				if e.Value != "" {
+					pgDB = e.Value
+				}
 			}
 		}
 	}
@@ -126,6 +138,13 @@ func (co *Collector) AppDetail(ctx context.Context, name string) (*model.AppDeta
 			}
 			det.PVCs[i].Detail = strings.TrimSpace(sz.String() + " · " + am)
 		}
+	}
+
+	// External backing service (e.g. the shared CNPG Postgres) — a network
+	// dependency, not a mounted volume; surface its cross-namespace PVCs as the
+	// app's real persistence.
+	if dep := co.postgresDependency(ctx, pgHost, pgDB, ns); dep != nil {
+		det.Dependencies = append(det.Dependencies, *dep)
 	}
 
 	// --- pods (filter by instance label) + metrics ---
@@ -207,6 +226,81 @@ func (co *Collector) AppDetail(ctx context.Context, name string) (*model.AppDeta
 }
 
 var gvrImagePolicy = schema.GroupVersionResource{Group: "image.toolkit.fluxcd.io", Version: "v1", Resource: "imagepolicies"}
+
+// parsePGHost splits a Postgres host (a k8s service DNS such as
+// "projects-pgstore-rw.databases.svc.cluster.local") into the service, its
+// namespace, and the owning CloudNativePG cluster (the service minus the
+// -rw/-ro/-r read/write suffix). A bare service name yields an empty namespace.
+func parsePGHost(host string) (svc, ns, cluster string) {
+	h := strings.TrimSuffix(strings.TrimSuffix(host, "."), ".svc.cluster.local")
+	h = strings.TrimSuffix(h, ".svc")
+	parts := strings.Split(h, ".")
+	svc = parts[0]
+	if len(parts) >= 2 {
+		ns = parts[1]
+	}
+	cluster = svc
+	for _, suf := range []string{"-rw", "-ro", "-r"} {
+		if strings.HasSuffix(cluster, suf) {
+			cluster = strings.TrimSuffix(cluster, suf)
+			break
+		}
+	}
+	return svc, ns, cluster
+}
+
+// postgresDependency resolves an app's external Postgres dependency from its
+// PGHOST/PGDATABASE env into a Dependency, including the CNPG cluster's PVCs
+// (cross-namespace). Returns nil when no host is configured.
+func (co *Collector) postgresDependency(ctx context.Context, host, db, appNS string) *model.Dependency {
+	if host == "" {
+		return nil
+	}
+	svc, ns, cluster := parsePGHost(host)
+	if ns == "" {
+		ns = appNS
+	}
+	if svc == "" || cluster == "" {
+		return nil
+	}
+	dep := &model.Dependency{Kind: "postgres", Name: cluster, Namespace: ns, Service: svc, Detail: db, Via: "PGHOST"}
+	// CNPG labels its PVCs cnpg.io/cluster=<cluster>; fall back to a name prefix.
+	if pl, err := co.c.Typed.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{LabelSelector: "cnpg.io/cluster=" + cluster}); err == nil {
+		for i := range pl.Items {
+			dep.PVCs = append(dep.PVCs, pvcInfo(&pl.Items[i]))
+		}
+	}
+	if len(dep.PVCs) == 0 {
+		if pl, err := co.c.Typed.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{}); err == nil {
+			for i := range pl.Items {
+				if strings.HasPrefix(pl.Items[i].Name, cluster+"-") {
+					dep.PVCs = append(dep.PVCs, pvcInfo(&pl.Items[i]))
+				}
+			}
+		}
+	}
+	sort.Slice(dep.PVCs, func(i, j int) bool { return dep.PVCs[i].Name < dep.PVCs[j].Name })
+	return dep
+}
+
+// pvcInfo maps a PersistentVolumeClaim to the model (metadata/spec/status only).
+func pvcInfo(p *corev1.PersistentVolumeClaim) model.PVCInfo {
+	capacity := ""
+	if q, ok := p.Status.Capacity["storage"]; ok {
+		capacity = q.String()
+	} else if q, ok := p.Spec.Resources.Requests["storage"]; ok {
+		capacity = q.String()
+	}
+	am := ""
+	if len(p.Spec.AccessModes) > 0 {
+		am = string(p.Spec.AccessModes[0])
+	}
+	sc := ""
+	if p.Spec.StorageClassName != nil {
+		sc = *p.Spec.StorageClassName
+	}
+	return model.PVCInfo{Namespace: p.Namespace, Name: p.Name, StorageClass: sc, Capacity: capacity, Status: string(p.Status.Phase), AccessMode: am}
+}
 
 var platformNote = map[string]string{
 	"kube-system":  "traefik · coredns · metrics-server · local-path",

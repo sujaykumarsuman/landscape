@@ -4,27 +4,41 @@ import "time"
 
 // AppDetail is the full k8s component graph for one app (the app-detail page).
 type AppDetail struct {
-	Name       string            `json:"name"`
-	Namespace  string            `json:"namespace"`
-	Owner      bool              `json:"owner"`
-	Status     string            `json:"status"`
-	StatusText string            `json:"statusText,omitempty"`
-	Version    string            `json:"version,omitempty"`
-	PublicURL  string            `json:"publicUrl,omitempty"`
-	UpdatedAt  time.Time         `json:"updatedAt"`
-	Image      string            `json:"image,omitempty"`
-	SourceRepo string            `json:"sourceRepo,omitempty"`
-	Deployment *DeploymentDetail `json:"deployment,omitempty"`
-	ReplicaSet *ReplicaSetDetail `json:"replicaSet,omitempty"`
-	Pods       []PodDetail       `json:"pods,omitempty"`
-	Service    *ServiceDetail    `json:"service,omitempty"`
-	Ingress    *IngressDetail    `json:"ingress,omitempty"`
-	ConfigMaps []RefName         `json:"configMaps,omitempty"`
-	Secrets    []RefName         `json:"secrets,omitempty"`
-	PVCs       []RefName         `json:"pvcs,omitempty"`
-	GitOps     AppGitOps         `json:"gitops"`
-	Links      []Link            `json:"links,omitempty"`
-	Warnings   []string          `json:"warnings,omitempty"`
+	Name         string            `json:"name"`
+	Namespace    string            `json:"namespace"`
+	Owner        bool              `json:"owner"`
+	Status       string            `json:"status"`
+	StatusText   string            `json:"statusText,omitempty"`
+	Version      string            `json:"version,omitempty"`
+	PublicURL    string            `json:"publicUrl,omitempty"`
+	UpdatedAt    time.Time         `json:"updatedAt"`
+	Image        string            `json:"image,omitempty"`
+	SourceRepo   string            `json:"sourceRepo,omitempty"`
+	Deployment   *DeploymentDetail `json:"deployment,omitempty"`
+	ReplicaSet   *ReplicaSetDetail `json:"replicaSet,omitempty"`
+	Pods         []PodDetail       `json:"pods,omitempty"`
+	Service      *ServiceDetail    `json:"service,omitempty"`
+	Ingress      *IngressDetail    `json:"ingress,omitempty"`
+	ConfigMaps   []RefName         `json:"configMaps,omitempty"`
+	Secrets      []RefName         `json:"secrets,omitempty"`
+	PVCs         []RefName         `json:"pvcs,omitempty"`
+	Dependencies []Dependency      `json:"dependencies,omitempty"`
+	GitOps       AppGitOps         `json:"gitops"`
+	Links        []Link            `json:"links,omitempty"`
+	Warnings     []string          `json:"warnings,omitempty"`
+}
+
+// Dependency is an external backing service this app depends on over the network
+// (not a mounted volume) — e.g. a shared CloudNativePG Postgres cluster in another
+// namespace. Its PVCs are the app's real persistence, cross-namespace.
+type Dependency struct {
+	Kind      string    `json:"kind"`                // "postgres"
+	Name      string    `json:"name"`                // cluster name, e.g. projects-pgstore
+	Namespace string    `json:"namespace,omitempty"` // where the backing service lives, e.g. databases
+	Service   string    `json:"service,omitempty"`   // the Service the app connects to, e.g. projects-pgstore-rw
+	Detail    string    `json:"detail,omitempty"`    // e.g. the database name "xlearndb"
+	Via       string    `json:"via,omitempty"`       // how it was detected, e.g. "PGHOST env"
+	PVCs      []PVCInfo `json:"pvcs,omitempty"`      // the backing service's PVCs (cross-namespace)
 }
 
 type DeploymentDetail struct {

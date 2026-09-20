@@ -24,14 +24,18 @@ type Link struct {
 
 // Node is one entity in the landscape.
 type Node struct {
-	ID         string            `json:"id"`
-	Kind       string            `json:"kind"` // repo|image|actions|flux|kustomization|helmRelease|controller|namespace|app|deployment|pod|service|ingressRoute|configMap|secret|pvc|ingress|infraTool
-	Name       string            `json:"name"`
-	Namespace  string            `json:"namespace,omitempty"`
-	Layer      Layer             `json:"layer"`
-	App        string            `json:"app,omitempty"` // the app this node belongs to (for drill-in + highlight)
-	Owner      bool              `json:"owner"`         // true = one of your maintained places; false = upstream infra tool
-	Status     string            `json:"status"`        // ok|progressing|failed|unknown
+	ID        string `json:"id"`
+	Kind      string `json:"kind"` // repo|image|actions|flux|kustomization|helmRelease|controller|namespace|app|deployment|pod|service|ingressRoute|configMap|secret|pvc|ingress|infraTool
+	Name      string `json:"name"`
+	Namespace string `json:"namespace,omitempty"`
+	Layer     Layer  `json:"layer"`
+	App       string `json:"app,omitempty"` // the app this node belongs to (for drill-in + highlight)
+	// Components lists the app/component names a node fans out to. A source repo
+	// that builds several images (e.g. xlearn → gateway + identity) collapses to a
+	// single source node whose Components drives the multi-component trace + chip.
+	Components []string          `json:"components,omitempty"`
+	Owner      bool              `json:"owner"`  // true = one of your maintained places; false = upstream infra tool
+	Status     string            `json:"status"` // ok|progressing|failed|unknown
 	StatusText string            `json:"statusText,omitempty"`
 	Summary    string            `json:"summary,omitempty"` // one-line explanation for the hover card
 	Meta       map[string]string `json:"meta,omitempty"`

@@ -81,6 +81,14 @@ button{font-family:var(--sans)}
 .card.accent-violet{border-color:rgba(155,140,240,.4);background:#15131f}
 .kind.teal{color:var(--teal)}
 .ghcr-label{display:flex;align-items:center;gap:6px;color:var(--mut);font-size:10px;letter-spacing:.4px;text-transform:uppercase;margin-top:2px}
+/* build lane: a multi-component app groups its images under one collapsible box */
+.img-group{border:1px dashed var(--line2);border-radius:10px;padding:7px;margin-top:2px}
+.img-group-h{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--dim);cursor:pointer;padding:1px 2px}
+.img-group-h .ig-toggle{margin-left:auto;display:inline-flex;color:var(--mut);transform:rotate(90deg);transition:transform .14s}
+.img-group.collapsed .ig-toggle{transform:rotate(0deg)}
+.img-group-b{display:flex;flex-direction:column;gap:8px;margin-top:7px}
+.img-group.collapsed .img-group-b{display:none}
+.img-group.trace{border-color:var(--teal)}
 .ctrls{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
 .kustlist{display:flex;flex-direction:column;gap:6px;margin-top:2px}
 .kustlist .kr{display:flex;align-items:center;gap:6px}
@@ -186,6 +194,7 @@ button{font-family:var(--sans)}
 .gcol.left .gnode{max-width:200px}
 .gnode.teal{border-color:rgba(53,208,192,.4)}.gnode.ok{border-color:rgba(87,211,154,.35)}
 .gnode.warnb{border-color:rgba(240,180,41,.3)}
+.gnode.depb{border-color:rgba(155,140,240,.35);background:rgba(155,140,240,.05)}
 .gnode .gk{font-size:9.5px;letter-spacing:.5px;text-transform:uppercase;color:var(--mut);display:flex;align-items:center;gap:5px}
 .gnode .gn{font-family:var(--mono);font-size:12.5px;margin-top:3px;color:var(--text);word-break:break-all}
 .gnode .gs{font-family:var(--mono);font-size:10.5px;color:var(--mut);margin-top:2px}

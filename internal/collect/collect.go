@@ -192,24 +192,24 @@ func (co *Collector) Graph(ctx context.Context) (*model.Graph, error) {
 		if owned {
 			ownedNS[ns] = true
 			tag := img.Tag
+			si := co.resolveSource(d.Labels, img)
 			appNode.Summary = fmt.Sprintf("Deployment %s · image %s · deployed by Flux from %s/apps/%s.yaml.", ready, img.String(), infraRepo, name)
-			appNode.Links = ghLinks(img, infraOwner, infraRepo, infraBranch, name)
+			appNode.Links = ghLinks(img, si, infraOwner, infraRepo, infraBranch, name)
 			if r, ok := routeForSvc[name]; ok {
 				appNode.Meta["route"] = r
 			}
-			// Source node keyed off the GIT repo (sourceRepo), not the image name,
+			// Source node keyed off the app group (app.kubernetes.io/part-of), not the image name,
 			// so a multi-component app (e.g. xlearn → gateway + identity, both from
 			// the xlearn repo) collapses to ONE source card with the correct link;
 			// the image + build nodes stay per-component.
-			src := sourceRepo(img)
-			srcID := "repo/" + src.Owner + "/" + src.Repo
-			srcNode := add(model.Node{ID: srcID, Kind: "repo", Name: src.Owner + "/" + src.Repo, Layer: model.LayerSource, Owner: true,
+			srcID := "repo/" + si.Owner + "/" + si.Group
+			srcNode := add(model.Node{ID: srcID, Kind: "repo", Name: si.Owner + "/" + si.Group, Layer: model.LayerSource, Owner: true,
 				Status: "ok", Summary: "Application source.",
-				Links: []model.Link{sourceLink(img)}})
-			srcNode.Components = append(srcNode.Components, name) // accumulate across components
+				Links: []model.Link{sourceLink(si)}})
+			srcNode.Components = append(srcNode.Components, componentName(d.Labels, name)) // accumulate across components
 			add(model.Node{ID: "image/" + img.Repo, Kind: "image", Name: img.Repo + ":" + tag, Namespace: "ghcr.io", Layer: model.LayerBuild, App: name, Owner: true,
 				Status: "ok", Summary: "Container image on GHCR (public).",
-				Links: []model.Link{{Type: "image", URL: "https://github.com/" + img.Owner + "/" + img.Repo + "/pkgs/container/" + img.Repo, Label: "ghcr · " + img.Repo}}})
+				Links: []model.Link{{Type: "image", URL: "https://github.com/" + si.Owner + "/" + si.Repo + "/pkgs/container/" + img.Repo, Label: "ghcr · " + img.Repo}}})
 			edge(srcID, "actions", "flow", name)
 			edge("actions", "image/"+img.Repo, "flow", name)
 			edge("image/"+img.Repo, appID, "deploy", name)
@@ -247,12 +247,11 @@ func (co *Collector) Graph(ctx context.Context) (*model.Graph, error) {
 		if n.Kind != "repo" || !n.Owner || len(n.Components) == 0 {
 			continue
 		}
-		sort.Strings(n.Components)
-		if len(n.Components) == 1 {
-			n.Name = co.githubOwner + "/" + n.Components[0]
-		} else {
-			n.Summary = fmt.Sprintf("Source repo — builds %d components: %s.", len(n.Components), strings.Join(n.Components, ", "))
+		if len(n.Components) <= 1 {
+			continue
 		}
+		sort.Strings(n.Components)
+		n.Summary = fmt.Sprintf("Source repo — builds %d components: %s.", len(n.Components), strings.Join(n.Components, ", "))
 	}
 
 	// Traefik ingress node (edge of the cluster)

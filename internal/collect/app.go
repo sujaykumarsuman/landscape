@@ -45,10 +45,11 @@ func (co *Collector) AppDetail(ctx context.Context, name string) (*model.AppDeta
 	det.Image = img.String()
 	det.Owner = img.Registry == "ghcr.io" && img.Owner == co.githubOwner
 	if det.Owner {
-		det.SourceRepo = img.Owner + "/" + img.Repo
+		si := co.resolveSource(d.Labels, img)
+		det.SourceRepo = si.Owner + "/" + si.Repo
 		det.Version = img.Tag
 		det.PublicURL = "" // filled by server from route if desired
-		det.Links = ghLinks(img, infraOwner, infraRepo, infraBranch, name)
+		det.Links = ghLinks(img, si, infraOwner, infraRepo, infraBranch, name)
 	}
 
 	// --- deployment detail ---

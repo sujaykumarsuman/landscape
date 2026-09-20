@@ -63,64 +63,86 @@ func parseGitURL(u string) (owner, repo string, ok bool) {
 	return "", "", false
 }
 
-// repoRef identifies a GitHub repository, optionally a subdirectory within it.
-type repoRef struct {
-	Owner  string
-	Repo   string
-	Subdir string
+// sourceInfo describes where an app's image is built from and how the landscape
+// Sources lane groups it — resolved from Kubernetes labels, not a hardcoded map:
+//   - app.kubernetes.io/part-of → Group: the app all its components belong to
+//     (xlearn's gateway/identity/curriculum → "xlearn"); also the Sources-lane
+//     dedup key, so a multi-component app collapses to ONE source card.
+//   - sujaykumar.dev/source-repo (+ -subdir) → Repo/Subdir: the GitHub repo the
+//     image is built from, for the case where it differs from the app name
+//     (projects → sujaykumarsuman.github.io/projects). Defaults to the group.
+//
+// Unlabeled workloads fall back to the image name, preserving prior behaviour.
+type sourceInfo struct {
+	Group  string // app group (part-of) — the Sources-lane node + card title
+	Owner  string // GitHub owner
+	Repo   string // source repo (defaults to Group)
+	Subdir string // source subdirectory, if any
 }
 
-// imageSourceOverrides maps an "owner/repo" image name to the repository its
-// image is actually built from, for the cases where the two differ. Most images
-// are built from a repo of the same name (ghcr.io/<owner>/<app> ← <owner>/<app>),
-// but two cases diverge:
-//   - projects-hub is built by the sujaykumarsuman.github.io repo from its
-//     projects/ directory — there is no repo named "projects-hub".
-//   - multi-component apps ship several images from ONE repo (xlearn →
-//     xlearn-gateway + xlearn-identity, both built from the xlearn repo). Mapping
-//     each image to the shared repo collapses them to a single source node/link.
-var imageSourceOverrides = map[string]repoRef{
-	"sujaykumarsuman/projects-hub":    {Owner: "sujaykumarsuman", Repo: "sujaykumarsuman.github.io", Subdir: "projects"},
-	"sujaykumarsuman/xlearn-gateway":  {Owner: "sujaykumarsuman", Repo: "xlearn"},
-	"sujaykumarsuman/xlearn-identity": {Owner: "sujaykumarsuman", Repo: "xlearn"},
-}
+// Kubernetes labels that drive Sources grouping + source links. part-of/component
+// are the standard app.kubernetes.io labels; source-repo/subdir are project-scoped
+// (a label value can't hold "owner/repo", so the owner is implied to be githubOwner).
+const (
+	labelPartOf       = "app.kubernetes.io/part-of"
+	labelComponent    = "app.kubernetes.io/component"
+	labelSourceRepo   = "sujaykumar.dev/source-repo"
+	labelSourceSubdir = "sujaykumar.dev/source-subdir"
+)
 
-// sourceRepo resolves the GitHub source repository (and any subdirectory) for an
-// image: an override when one is registered, otherwise the image name itself.
-func sourceRepo(img imageRef) repoRef {
-	if r, ok := imageSourceOverrides[img.Owner+"/"+img.Repo]; ok {
-		return r
+// resolveSource derives an image's source repo + app group from a workload's
+// labels, falling back to the image name when the grouping labels are absent.
+func (co *Collector) resolveSource(labels map[string]string, img imageRef) sourceInfo {
+	owner := co.githubOwner
+	if owner == "" {
+		owner = img.Owner
 	}
-	return repoRef{Owner: img.Owner, Repo: img.Repo}
+	group := labels[labelPartOf]
+	if group == "" {
+		group = img.Repo // unlabeled: keep the image identity, one card per image
+	}
+	repo := labels[labelSourceRepo]
+	if repo == "" {
+		repo = group
+	}
+	return sourceInfo{Group: group, Owner: owner, Repo: repo, Subdir: labels[labelSourceSubdir]}
 }
 
-// sourceLink is the "source" deep-link for an image, resolved through sourceRepo
-// so images built from a different repo (e.g. projects-hub, built from
+// componentName is the app.kubernetes.io/component label if set, else the workload
+// name — the granular component listed under a multi-component source card.
+func componentName(labels map[string]string, workload string) string {
+	if c := labels[labelComponent]; c != "" {
+		return c
+	}
+	return workload
+}
+
+// sourceLink is the "source" deep-link for a resolved source (repo + optional
+// subdir) so images built from a different repo (e.g. projects, built from
 // sujaykumarsuman.github.io/projects) link to the right place, not a 404.
-func sourceLink(img imageRef) model.Link {
-	src := sourceRepo(img)
-	url := "https://github.com/" + src.Owner + "/" + src.Repo
-	label := src.Owner + "/" + src.Repo
-	if src.Subdir != "" {
-		url += "/tree/main/" + src.Subdir
-		label += "/" + src.Subdir
+func sourceLink(si sourceInfo) model.Link {
+	url := "https://github.com/" + si.Owner + "/" + si.Repo
+	label := si.Owner + "/" + si.Repo
+	if si.Subdir != "" {
+		url += "/tree/main/" + si.Subdir
+		label += "/" + si.Subdir
 	}
 	return model.Link{Type: "source", URL: url, Label: label}
 }
 
-// ghLinks builds the deep-links for an owned app image plus its GitOps config.
-func ghLinks(img imageRef, infraOwner, infraRepo, infraBranch, app string) []model.Link {
+// ghLinks builds the deep-links for an owned app image plus its GitOps config,
+// using the resolved source (si) for the repo-relative links (source, workflow,
+// GHCR package path all resolve under the source repo) and the image name for the
+// package itself.
+func ghLinks(img imageRef, si sourceInfo, infraOwner, infraRepo, infraBranch, app string) []model.Link {
 	if infraBranch == "" {
 		infraBranch = "main"
 	}
 	var out []model.Link
-	if img.Owner != "" && img.Repo != "" {
-		// The source repo is not always the image name (e.g. projects-hub); the
-		// GHCR package still resolves under the source repo's path.
-		src := sourceRepo(img)
-		base := "https://github.com/" + src.Owner + "/" + src.Repo
+	if si.Owner != "" && si.Repo != "" {
+		base := "https://github.com/" + si.Owner + "/" + si.Repo
 		out = append(out,
-			sourceLink(img),
+			sourceLink(si),
 			model.Link{Type: "workflow", URL: base + "/blob/main/.github/workflows/deploy.yml", Label: "deploy.yml"},
 			model.Link{Type: "image", URL: base + "/pkgs/container/" + img.Repo, Label: "ghcr · " + img.Repo},
 		)

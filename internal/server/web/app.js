@@ -546,9 +546,21 @@ function applyTrace(app) {
   const map = $(".map"); if (!map) return;
   map.classList.add("tracing");
   $$(".map .trace").forEach(x => x.classList.remove("trace"));
-  // app may be a single component or a comma-set (a repo that builds several).
-  String(app).split(",").filter(Boolean).forEach(a => {
-    $$(`.map [data-app="${cssq(a)}"]`).forEach(x => x.classList.add("trace"));
+
+  // Expand to the full app group: hovering ANY component of a multi-component app
+  // (e.g. xlearn's gateway OR identity) must highlight the whole app in every lane,
+  // not just the one component. Grouped cards carry the set in data-apps.
+  const want = new Set(String(app).split(",").filter(Boolean));
+  $$(".map [data-apps]").forEach(el => {
+    const group = (el.dataset.apps || "").split(",").filter(Boolean);
+    if (group.some(a => want.has(a))) group.forEach(a => want.add(a));
+  });
+  // Highlight every node of each wanted component, plus the grouped source/build
+  // cards that represent them.
+  want.forEach(a => $$(`.map [data-app="${cssq(a)}"]`).forEach(x => x.classList.add("trace")));
+  $$(".map [data-apps]").forEach(el => {
+    const group = (el.dataset.apps || "").split(",").filter(Boolean);
+    if (group.some(a => want.has(a))) el.classList.add("trace");
   });
   // GitOps steps that apply to every app (image-automation, apps kustomization)
   $$(".map .flowall").forEach(x => x.classList.add("trace"));

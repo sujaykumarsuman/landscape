@@ -206,7 +206,11 @@ func (co *Collector) Graph(ctx context.Context) (*model.Graph, error) {
 			srcNode := add(model.Node{ID: srcID, Kind: "repo", Name: si.Owner + "/" + si.Group, Layer: model.LayerSource, Owner: true,
 				Status: "ok", Summary: "Application source.",
 				Links: []model.Link{sourceLink(si)}})
-			srcNode.Components = append(srcNode.Components, componentName(d.Labels, name)) // accumulate across components
+			// Components are the workload NAMES (xlearn-gateway, …), not the
+			// app.kubernetes.io/component label: the frontend correlates each
+			// image/app card to its source group by matching these against the
+			// card's data-app (the service name), so the vocabularies must match.
+			srcNode.Components = append(srcNode.Components, name) // accumulate across components
 			add(model.Node{ID: "image/" + img.Repo, Kind: "image", Name: img.Repo + ":" + tag, Namespace: "ghcr.io", Layer: model.LayerBuild, App: name, Owner: true,
 				Status: "ok", Summary: "Container image on GHCR (public).",
 				Links: []model.Link{{Type: "image", URL: "https://github.com/" + si.Owner + "/" + si.Repo + "/pkgs/container/" + img.Repo, Label: "ghcr · " + img.Repo}}})

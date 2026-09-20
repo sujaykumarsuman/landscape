@@ -80,12 +80,13 @@ type sourceInfo struct {
 	Subdir string // source subdirectory, if any
 }
 
-// Kubernetes labels that drive Sources grouping + source links. part-of/component
-// are the standard app.kubernetes.io labels; source-repo/subdir are project-scoped
+// Kubernetes labels that drive Sources grouping + source links. part-of is the
+// standard app.kubernetes.io group label; source-repo/subdir are project-scoped
 // (a label value can't hold "owner/repo", so the owner is implied to be githubOwner).
+// The workloads also carry app.kubernetes.io/component, but landscape correlates
+// cards to their group by the workload NAME (data-app), so it isn't read here.
 const (
 	labelPartOf       = "app.kubernetes.io/part-of"
-	labelComponent    = "app.kubernetes.io/component"
 	labelSourceRepo   = "sujaykumar.dev/source-repo"
 	labelSourceSubdir = "sujaykumar.dev/source-subdir"
 )
@@ -106,15 +107,6 @@ func (co *Collector) resolveSource(labels map[string]string, img imageRef) sourc
 		repo = group
 	}
 	return sourceInfo{Group: group, Owner: owner, Repo: repo, Subdir: labels[labelSourceSubdir]}
-}
-
-// componentName is the app.kubernetes.io/component label if set, else the workload
-// name — the granular component listed under a multi-component source card.
-func componentName(labels map[string]string, workload string) string {
-	if c := labels[labelComponent]; c != "" {
-		return c
-	}
-	return workload
 }
 
 // sourceLink is the "source" deep-link for a resolved source (repo + optional

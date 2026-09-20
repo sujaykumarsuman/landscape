@@ -42,14 +42,6 @@ func TestSourceGroupingByLabels(t *testing.T) {
 	if fb.Group != "airlift" || fb.Repo != "airlift" {
 		t.Errorf("unlabeled fallback wrong: %+v", fb)
 	}
-
-	// componentName prefers the label, else the workload name.
-	if got := componentName(map[string]string{labelComponent: "gateway"}, "xlearn-gateway"); got != "gateway" {
-		t.Errorf("componentName label = %q, want gateway", got)
-	}
-	if got := componentName(nil, "xlearn-gateway"); got != "xlearn-gateway" {
-		t.Errorf("componentName fallback = %q, want xlearn-gateway", got)
-	}
 }
 
 func TestParsePGHost(t *testing.T) {

@@ -73,10 +73,16 @@ type repoRef struct {
 // imageSourceOverrides maps an "owner/repo" image name to the repository its
 // image is actually built from, for the cases where the two differ. Most images
 // are built from a repo of the same name (ghcr.io/<owner>/<app> ← <owner>/<app>),
-// but the projects-hub image is built by the sujaykumarsuman.github.io repo from
-// its projects/ directory — there is no repo named "projects-hub".
+// but two cases diverge:
+//   - projects-hub is built by the sujaykumarsuman.github.io repo from its
+//     projects/ directory — there is no repo named "projects-hub".
+//   - multi-component apps ship several images from ONE repo (xlearn →
+//     xlearn-gateway + xlearn-identity, both built from the xlearn repo). Mapping
+//     each image to the shared repo collapses them to a single source node/link.
 var imageSourceOverrides = map[string]repoRef{
-	"sujaykumarsuman/projects-hub": {Owner: "sujaykumarsuman", Repo: "sujaykumarsuman.github.io", Subdir: "projects"},
+	"sujaykumarsuman/projects-hub":    {Owner: "sujaykumarsuman", Repo: "sujaykumarsuman.github.io", Subdir: "projects"},
+	"sujaykumarsuman/xlearn-gateway":  {Owner: "sujaykumarsuman", Repo: "xlearn"},
+	"sujaykumarsuman/xlearn-identity": {Owner: "sujaykumarsuman", Repo: "xlearn"},
 }
 
 // sourceRepo resolves the GitHub source repository (and any subdirectory) for an

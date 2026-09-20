@@ -197,14 +197,20 @@ func (co *Collector) Graph(ctx context.Context) (*model.Graph, error) {
 			if r, ok := routeForSvc[name]; ok {
 				appNode.Meta["route"] = r
 			}
-			// source + image + build nodes
-			add(model.Node{ID: "repo/" + img.Repo, Kind: "repo", Name: img.Owner + "/" + img.Repo, Layer: model.LayerSource, App: name, Owner: true,
+			// Source node keyed off the GIT repo (sourceRepo), not the image name,
+			// so a multi-component app (e.g. xlearn → gateway + identity, both from
+			// the xlearn repo) collapses to ONE source card with the correct link;
+			// the image + build nodes stay per-component.
+			src := sourceRepo(img)
+			srcID := "repo/" + src.Owner + "/" + src.Repo
+			srcNode := add(model.Node{ID: srcID, Kind: "repo", Name: src.Owner + "/" + src.Repo, Layer: model.LayerSource, Owner: true,
 				Status: "ok", Summary: "Application source.",
 				Links: []model.Link{sourceLink(img)}})
+			srcNode.Components = append(srcNode.Components, name) // accumulate across components
 			add(model.Node{ID: "image/" + img.Repo, Kind: "image", Name: img.Repo + ":" + tag, Namespace: "ghcr.io", Layer: model.LayerBuild, App: name, Owner: true,
 				Status: "ok", Summary: "Container image on GHCR (public).",
 				Links: []model.Link{{Type: "image", URL: "https://github.com/" + img.Owner + "/" + img.Repo + "/pkgs/container/" + img.Repo, Label: "ghcr · " + img.Repo}}})
-			edge("repo/"+img.Repo, "actions", "flow", name)
+			edge(srcID, "actions", "flow", name)
 			edge("actions", "image/"+img.Repo, "flow", name)
 			edge("image/"+img.Repo, appID, "deploy", name)
 			edge("image/"+img.Repo, "imgauto", "watch", name)
@@ -228,6 +234,24 @@ func (co *Collector) Graph(ctx context.Context) (*model.Graph, error) {
 				Status: st, StatusText: msg, Summary: "Flux HelmRelease — renders the shared chart and installs it."})
 			edge("kust/apps", hid, "deploy", name)
 			edge(hid, appID, "deploy", name)
+		}
+	}
+
+	// Finalize app-source nodes. The Sources lane lists your apps by app name:
+	//   - single-component apps show the app/image name (e.g. projects-hub), even
+	//     when the source repo differs (projects-hub is built from
+	//     sujaykumarsuman.github.io) — the link still resolves to the real repo.
+	//   - multi-component apps keep the shared repo name (e.g. xlearn) and list the
+	//     components they build.
+	for _, n := range nodes {
+		if n.Kind != "repo" || !n.Owner || len(n.Components) == 0 {
+			continue
+		}
+		sort.Strings(n.Components)
+		if len(n.Components) == 1 {
+			n.Name = co.githubOwner + "/" + n.Components[0]
+		} else {
+			n.Summary = fmt.Sprintf("Source repo — builds %d components: %s.", len(n.Components), strings.Join(n.Components, ", "))
 		}
 	}
 

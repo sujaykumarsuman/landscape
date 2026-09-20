@@ -279,6 +279,7 @@ function icon(kind, w = 13, stroke = "currentColor") {
     secret: `<rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>`,
     pvc: `<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/>`,
     app: `<path d="M4 7h16M4 12h10M4 17h16"/><circle cx="18" cy="12" r="2"/>`,
+    database: `<ellipse cx="12" cy="5" rx="7" ry="2.5"/><path d="M5 5v14c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V5"/><path d="M5 12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5"/>`,
     clock: `<circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/>`,
     ext: `<path d="M7 17 17 7M8 7h9v9"/>`,
     chevron: `<path d="M9 6l6 6-6 6"/>`,
@@ -344,13 +345,29 @@ function renderMap(v) {
   if (ci) srcCards.push(mapCard(ci, { kindLabel: "reusable CI", sub: "build-push.yml" }));
   const lane1 = lane("sources", "Sources · GitHub", srcCards.join(""));
 
-  /* lane 2: build */
-  const imgCards = images.map(im => {
+  /* lane 2: build — images from a multi-component repo group under one app box */
+  const imgCardHTML = im => {
     const [nm, tag] = String(im.name).split(":");
     return `<div class="card appflow" data-id="${esc(im.id)}" data-app="${esc(im.app || "")}">
       <div class="mono img-name" style="font-size:11.5px">${esc(nm)}</div>
       <div class="mono img-name" style="font-size:11px;color:var(--teal);margin-top:2px">:${esc(tag || "")}</div></div>`;
+  };
+  const compToRepo = {};
+  appRepos.forEach(r => (r.components || []).forEach(c => { compToRepo[c] = r; }));
+  const imgGroups = {}, soloImgs = [];
+  images.forEach(im => {
+    const r = compToRepo[im.app];
+    if (r && (r.components || []).length > 1) (imgGroups[r.id] = imgGroups[r.id] || { repo: r, imgs: [] }).imgs.push(im);
+    else soloImgs.push(im);
+  });
+  const groupBoxes = Object.values(imgGroups).map(gp => {
+    const label = String(gp.repo.name).split("/").pop();
+    const apps = (gp.repo.components || []).join(",");
+    return `<div class="img-group" data-app="${esc((gp.repo.components || [])[0] || "")}" data-apps="${esc(apps)}">
+      <div class="img-group-h"><span class="mono">${esc(label)}</span><span class="chip xs">${gp.imgs.length}</span><span class="ig-toggle" title="collapse">${icon("chevron", 11, "#616b7a")}</span></div>
+      <div class="img-group-b">${gp.imgs.map(imgCardHTML).join("")}</div></div>`;
   }).join("");
+  const imgCards = groupBoxes + soloImgs.map(imgCardHTML).join("");
   const buildInner = `
     <div class="card hoverable" data-id="actions">
       <div class="kind">GitHub Actions</div>
@@ -433,9 +450,14 @@ function flowgap(kindClass, label) {
 }
 function mapCard(n, opt = {}) {
   const dotColor = opt.accent === "teal" ? "s-ok" : "s-unknown";
+  // A source repo that builds several components (e.g. xlearn → gateway + identity)
+  // is ONE card whose trace fans out to every component (data-apps).
+  const comps = n.components || [];
+  const apps = comps.length ? comps : (n.app ? [n.app] : []);
   const kindLine = opt.kindLabel ? `<div class="kind ${opt.kindTeal ? "teal" : ""}" style="margin-top:5px">${esc(opt.kindLabel)}</div>` : "";
-  const sub = opt.sub != null ? opt.sub : reposub(n);
-  return `<div class="card appflow ${opt.accent === "teal" ? "accent-teal" : ""}" data-id="${esc(n.id)}" data-app="${esc(n.app || "")}">
+  let sub = opt.sub != null ? opt.sub : reposub(n);
+  if (comps.length > 1) sub = comps.length + " components · " + comps.join(" · ");
+  return `<div class="card appflow ${opt.accent === "teal" ? "accent-teal" : ""}" data-id="${esc(n.id)}" data-app="${esc(apps[0] || "")}" data-apps="${esc(apps.join(","))}">
     <div class="row1"><span class="dot ${dotColor}"></span><span class="nm mono">${esc(shortRepo(n.name))}</span></div>
     ${kindLine}${sub ? `<div class="sub">${esc(sub)}</div>` : ""}</div>`;
 }
@@ -477,7 +499,7 @@ function wireMap(byId) {
   { const sl = $("#storagelink"); if (sl) sl.onclick = () => setView("storage"); }
   $$(".map [data-id]").forEach(el => {
     const node = byId[el.dataset.id];
-    const app = el.dataset.app;
+    const app = el.dataset.apps || el.dataset.app; // prefer the multi-component set
     el.addEventListener("mouseenter", () => {
       cancelHide();
       if (state.pin) return;                 // locked: don't re-trace on hover
@@ -492,6 +514,15 @@ function wireMap(byId) {
       if (!app) return;
       if (state.pin && state.pin === app) unpin(); else pinApp(app);
     });
+  });
+  // multi-component build group: hover traces all its components; the header
+  // toggles collapse (it has no data-id, so it's wired separately).
+  $$(".map .img-group").forEach(el => {
+    const apps = el.dataset.apps || el.dataset.app;
+    el.addEventListener("mouseenter", () => { cancelHide(); if (state.pin) return; if (apps) applyTrace(apps); });
+    el.addEventListener("mouseleave", scheduleHide);
+    const h = el.querySelector(".img-group-h");
+    if (h) h.addEventListener("click", (e) => { e.stopPropagation(); el.classList.toggle("collapsed"); });
   });
   // "open components →" navigates to the app page (does not pin)
   $$(".map .app-card .open").forEach(el => el.addEventListener("click", (e) => {
@@ -515,7 +546,10 @@ function applyTrace(app) {
   const map = $(".map"); if (!map) return;
   map.classList.add("tracing");
   $$(".map .trace").forEach(x => x.classList.remove("trace"));
-  $$(`.map [data-app="${cssq(app)}"]`).forEach(x => x.classList.add("trace"));
+  // app may be a single component or a comma-set (a repo that builds several).
+  String(app).split(",").filter(Boolean).forEach(a => {
+    $$(`.map [data-app="${cssq(a)}"]`).forEach(x => x.classList.add("trace"));
+  });
   // GitOps steps that apply to every app (image-automation, apps kustomization)
   $$(".map .flowall").forEach(x => x.classList.add("trace"));
 }
@@ -679,7 +713,7 @@ function gnode(gid, kind, kindLabel, name, sub, extra = "") {
     <div class="gn">${name}</div>${sub ? `<div class="gs">${sub}</div>` : ""}</div>`;
 }
 function kindColor(k) {
-  return ({ helmRelease: "#35d0c0", pod: "#57d39a", secret: "#f0b429", ingressRoute: "#35d0c0", service: "#9aa4b2" })[k] || "#9aa4b2";
+  return ({ helmRelease: "#35d0c0", pod: "#57d39a", secret: "#f0b429", ingressRoute: "#35d0c0", service: "#9aa4b2", database: "#6aa6ff", pvc: "#6aa6ff" })[k] || "#9aa4b2";
 }
 function appGraphHTML(d) {
   const dep = d.deployment || {};
@@ -695,11 +729,22 @@ function appGraphHTML(d) {
   const imgPill = `<span class="srcpill teal" data-gid="img">${esc(shortImage(d.image))}</span>`;
   const srcstrip = `<div class="srcstrip">${repoPill}${imgPill}</div>`;
 
-  /* left column: config / secret / pvc */
+  /* left column: config / secret / pvc + external backing services (e.g. DB) */
   const left = [];
   (d.configMaps || []).forEach((r, i) => left.push(gnode("cm" + i, "configMap", "ConfigMap", esc(r.name), esc(r.origin || ""))));
   (d.secrets || []).forEach((r, i) => left.push(gnode("sec" + i, "secret", "Secret" + (r.sops ? " · SOPS" : ""), esc(r.name), esc(r.origin || ""), "warnb")));
   (d.pvcs || []).forEach((r, i) => left.push(gnode("pvc" + i, "pvc", "PVC · local-path", esc(r.name), esc(r.detail || r.origin || ""))));
+  // External backing services (CNPG Postgres, …): a network dependency plus its
+  // cross-namespace PVCs — the app's real persistence, not a mounted volume.
+  (d.dependencies || []).forEach((dp, j) => {
+    const gid = "db" + j;
+    const kindLabel = (dp.kind === "postgres" ? "Postgres · CNPG" : "Backing service") + (dp.namespace ? " · ns " + dp.namespace : "");
+    const sub = [dp.detail ? "db " + esc(dp.detail) : "", esc(dp.service || "")].filter(Boolean).join(" · ");
+    left.push(gnode(gid, "database", kindLabel, esc(dp.name), sub, "depb"));
+    (dp.pvcs || []).forEach((p, i) => left.push(gnode(gid + "pvc" + i,
+      "pvc", "PVC · " + (p.storageClass || "longhorn") + (p.namespace ? " · " + p.namespace : ""),
+      esc(p.name), esc([p.capacity, p.accessMode].filter(Boolean).join(" · ")), "depb")));
+  });
   if (!left.length) left.push(`<div class="gnode" style="opacity:.6"><div class="gk">mounts</div><div class="gs">no config, secrets or volumes</div></div>`);
 
   /* mid spine: HR -> Deploy -> RS -> Pod(s) */
@@ -837,21 +882,27 @@ function drawAppEdges() {
   pods.forEach(p => edges.push([rsOrDep, p, "flow"]));
   // mounts (dashed) from deployment to each config/secret/pvc
   Object.keys(pos).filter(k => /^(cm|sec|pvc)\d+$/.test(k)).forEach(k => edges.push(["dep", k, "mount"]));
+  // external backing service (db{j}, e.g. CNPG Postgres) + its cross-ns PVCs
+  Object.keys(pos).filter(k => /^db\d+$/.test(k)).forEach(k => {
+    edges.push(["dep", k, "dep"]);
+    Object.keys(pos).filter(p => new RegExp("^" + k + "pvc\\d+$").test(p)).forEach(p => edges.push([k, p, "mount"]));
+  });
   // networking chain
   if (pos["ing"]) edges.push(["ing", pos["mw"] ? "mw" : (pos["svc"] ? "svc" : firstPod), "flow"]);
   if (pos["mw"] && pos["svc"]) edges.push(["mw", "svc", "flow"]);
   if (pos["svc"]) edges.push(["svc", firstPod, "teal"]);
 
+  const edgeColor = k => k === "teal" ? "#35d0c0" : k === "dep" ? "#9b8cf0" : "#4a5566";
   let paths = "";
   edges.forEach(([a, b, kind]) => {
     const A = pos[a], B = pos[b]; if (!A || !B) return;
-    const col = kind === "teal" ? "#35d0c0" : "#4a5566";
-    const dash = kind === "mount" ? `stroke-dasharray="4 4"` : "";
+    const col = edgeColor(kind);
+    const dash = (kind === "mount" || kind === "dep") ? `stroke-dasharray="4 4"` : "";
     const p = anchor(A, B);
     paths += `<path d="M ${p.x1} ${p.y1} C ${p.cx1} ${p.cy1}, ${p.cx2} ${p.cy2}, ${p.x2} ${p.y2}" fill="none" stroke="${col}" stroke-width="1.5" ${dash} marker-end="url(#gm-${kind})"/>`;
   });
   const defs = `<defs>
-    ${["teal", "flow", "mount"].map(k => `<marker id="gm-${k}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M2 2 8 5 2 8" fill="none" stroke="${k === "teal" ? "#35d0c0" : "#4a5566"}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>`).join("")}
+    ${["teal", "flow", "mount", "dep"].map(k => `<marker id="gm-${k}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M2 2 8 5 2 8" fill="none" stroke="${edgeColor(k)}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>`).join("")}
   </defs>`;
   svg.innerHTML = defs + paths;
 }

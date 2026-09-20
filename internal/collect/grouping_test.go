@@ -2,25 +2,53 @@ package collect
 
 import "testing"
 
-// A multi-component app's images all resolve to one source repo, so the Sources
-// lane collapses them to a single card with the correct link.
-func TestSourceRepoGrouping(t *testing.T) {
-	cases := []struct{ image, wantRepo string }{
-		{"ghcr.io/sujaykumarsuman/xlearn-gateway:0.1.7", "xlearn"},
-		{"ghcr.io/sujaykumarsuman/xlearn-identity:0.1.7", "xlearn"},
-		{"ghcr.io/sujaykumarsuman/airlift:1.0.1", "airlift"}, // single-component: unchanged
-	}
-	for _, c := range cases {
-		src := sourceRepo(parseImage(c.image))
-		if src.Owner != "sujaykumarsuman" || src.Repo != c.wantRepo {
-			t.Errorf("sourceRepo(%q) = %s/%s, want sujaykumarsuman/%s", c.image, src.Owner, src.Repo, c.wantRepo)
+// Source grouping is label-driven (app.kubernetes.io/part-of), not a hardcoded
+// map: a multi-component app's images all resolve to one source group/repo, so the
+// Sources lane collapses them to a single card with the correct link.
+func TestSourceGroupingByLabels(t *testing.T) {
+	co := &Collector{githubOwner: "sujaykumarsuman"}
+	partOf := func(group string) map[string]string { return map[string]string{labelPartOf: group} }
+
+	// All three xlearn components (gateway/identity/curriculum) are part-of xlearn,
+	// so they share ONE source group + repo — including curriculum, with no code change.
+	g := co.resolveSource(partOf("xlearn"), parseImage("ghcr.io/sujaykumarsuman/xlearn-gateway:0.1.11"))
+	i := co.resolveSource(partOf("xlearn"), parseImage("ghcr.io/sujaykumarsuman/xlearn-identity:0.1.11"))
+	c := co.resolveSource(partOf("xlearn"), parseImage("ghcr.io/sujaykumarsuman/xlearn-curriculum:0.1.11"))
+	for _, si := range []sourceInfo{g, i, c} {
+		if si.Group != "xlearn" || si.Owner != "sujaykumarsuman" || si.Repo != "xlearn" || si.Subdir != "" {
+			t.Errorf("xlearn component grouped wrong: %+v", si)
 		}
 	}
-	// The two xlearn images must map to the SAME source-node id (so they dedupe).
-	g := sourceRepo(parseImage("ghcr.io/sujaykumarsuman/xlearn-gateway:0.1.7"))
-	i := sourceRepo(parseImage("ghcr.io/sujaykumarsuman/xlearn-identity:0.1.7"))
-	if g != i {
-		t.Errorf("xlearn images must share a source repo: %+v != %+v", g, i)
+	if g != i || i != c {
+		t.Errorf("xlearn components must share a source: %+v / %+v / %+v", g, i, c)
+	}
+
+	// source-repo/subdir labels override the repo when it differs from the group
+	// (projects is built from sujaykumarsuman.github.io/projects).
+	proj := co.resolveSource(map[string]string{
+		labelPartOf:       "projects",
+		labelSourceRepo:   "sujaykumarsuman.github.io",
+		labelSourceSubdir: "projects",
+	}, parseImage("ghcr.io/sujaykumarsuman/projects-hub:0.1.2"))
+	if proj.Group != "projects" || proj.Repo != "sujaykumarsuman.github.io" || proj.Subdir != "projects" {
+		t.Errorf("projects source override wrong: %+v", proj)
+	}
+	if l := sourceLink(proj); l.URL != "https://github.com/sujaykumarsuman/sujaykumarsuman.github.io/tree/main/projects" {
+		t.Errorf("projects source link wrong: %q", l.URL)
+	}
+
+	// An unlabeled workload falls back to the image identity (prior behaviour).
+	fb := co.resolveSource(nil, parseImage("ghcr.io/sujaykumarsuman/airlift:1.0.1"))
+	if fb.Group != "airlift" || fb.Repo != "airlift" {
+		t.Errorf("unlabeled fallback wrong: %+v", fb)
+	}
+
+	// componentName prefers the label, else the workload name.
+	if got := componentName(map[string]string{labelComponent: "gateway"}, "xlearn-gateway"); got != "gateway" {
+		t.Errorf("componentName label = %q, want gateway", got)
+	}
+	if got := componentName(nil, "xlearn-gateway"); got != "xlearn-gateway" {
+		t.Errorf("componentName fallback = %q, want xlearn-gateway", got)
 	}
 }
 

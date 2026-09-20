@@ -40,7 +40,8 @@ func TestParseGitURL(t *testing.T) {
 
 func TestGhLinks(t *testing.T) {
 	img := parseImage("ghcr.io/sujaykumarsuman/airlift:1.0.1")
-	links := ghLinks(img, "sujaykumarsuman", "infra", "main", "airlift")
+	si := sourceInfo{Group: "airlift", Owner: "sujaykumarsuman", Repo: "airlift"}
+	links := ghLinks(img, si, "sujaykumarsuman", "infra", "main", "airlift")
 	byType := map[string]string{}
 	for _, l := range links {
 		byType[l.Type] = l.URL
@@ -59,10 +60,12 @@ func TestGhLinks(t *testing.T) {
 }
 
 func TestGhLinksProjectsHub(t *testing.T) {
-	// projects-hub is built from the sujaykumarsuman.github.io repo (projects/),
-	// not a repo named "projects-hub" — its links must resolve to the real source.
+	// projects is built from the sujaykumarsuman.github.io repo (projects/), not a
+	// repo named "projects-hub" — the source override labels (resolved into si) make
+	// its links resolve to the real source.
 	img := parseImage("ghcr.io/sujaykumarsuman/projects-hub:0.1.1")
-	links := ghLinks(img, "sujaykumarsuman", "infra", "main", "projects-hub")
+	si := sourceInfo{Group: "projects", Owner: "sujaykumarsuman", Repo: "sujaykumarsuman.github.io", Subdir: "projects"}
+	links := ghLinks(img, si, "sujaykumarsuman", "infra", "main", "projects-hub")
 	byType := map[string]string{}
 	for _, l := range links {
 		byType[l.Type] = l.URL
@@ -81,13 +84,16 @@ func TestGhLinksProjectsHub(t *testing.T) {
 }
 
 func TestSourceLink(t *testing.T) {
-	cases := []struct{ image, url string }{
-		{"ghcr.io/sujaykumarsuman/airlift:1.0.1", "https://github.com/sujaykumarsuman/airlift"},
-		{"ghcr.io/sujaykumarsuman/projects-hub:0.1.1", "https://github.com/sujaykumarsuman/sujaykumarsuman.github.io/tree/main/projects"},
+	cases := []struct {
+		si  sourceInfo
+		url string
+	}{
+		{sourceInfo{Owner: "sujaykumarsuman", Repo: "airlift"}, "https://github.com/sujaykumarsuman/airlift"},
+		{sourceInfo{Owner: "sujaykumarsuman", Repo: "sujaykumarsuman.github.io", Subdir: "projects"}, "https://github.com/sujaykumarsuman/sujaykumarsuman.github.io/tree/main/projects"},
 	}
 	for _, c := range cases {
-		if got := sourceLink(parseImage(c.image)); got.URL != c.url {
-			t.Errorf("sourceLink(%q).URL = %q, want %q", c.image, got.URL, c.url)
+		if got := sourceLink(c.si); got.URL != c.url {
+			t.Errorf("sourceLink(%+v).URL = %q, want %q", c.si, got.URL, c.url)
 		}
 	}
 }

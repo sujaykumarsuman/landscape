@@ -60,7 +60,15 @@ The read side. A `Collector{c *kube.Clients, githubOwner}`.
   with `relAge`.
 - `links.go`: `parseImage`, `parseGitURL`, `ghLinks` (Source/Workflow/Image/
   Config deep-links), and the infra-tool docs map. Helpers `kustURL`/`trimPath`
-  build the repo-folder links for kustomizations.
+  build the repo-folder links for kustomizations. **Source grouping is
+  label-driven** (not a hardcoded map): `resolveSource` reads
+  `app.kubernetes.io/part-of` (the app group / Sources-lane dedup key + default
+  source repo), `app.kubernetes.io/component` (the granular component), and the
+  exception pair `sujaykumar.dev/source-repo`/`-subdir` (only when the image is
+  built from a differently-named repo or a subdir — `projects-hub`). Unlabeled
+  workloads fall back to the image name. Apps set these via the shared
+  `charts/project` values in the infra repo, so a new multi-service app groups with
+  no landscape change.
 
 GVRs (top of `collect.go`): `helm.toolkit.fluxcd.io/v2 helmreleases`,
 `kustomize.toolkit.fluxcd.io/v1 kustomizations`,

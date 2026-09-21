@@ -1,10 +1,10 @@
 # STATUS
 
-_Last updated: 2026-09-16 (v0.6.0)._
+_Last updated: 2026-09-21 (v0.8.3)._
 
 ## Live
 
-- **v0.6.0** at https://projects.sujaykumar.dev/landscape, deployed by GitOps
+- **v0.8.3** at https://projects.sujaykumar.dev/landscape, deployed by GitOps
   (Flux + Helm from `sujaykumarsuman/infra`, `apps/landscape.yaml`).
 - Read-only ClusterRole (see the invariant in `CLAUDE.md`). Admin-password gated
   (SOPS secret `landscape-admin`).
@@ -42,6 +42,24 @@ _Last updated: 2026-09-16 (v0.6.0)._
   StorageClasses and PVCs across namespaces, read live; reworded the map footer to
   reflect the whole platform (Longhorn + local-path PVCs · CloudNativePG Postgres).
   RBAC gained `storage.k8s.io/storageclasses` (get,list), read-only.
+- **v0.7.0** — group multi-component apps by source repo in the map (one source
+  box whose trace fans out to every component) and surface each app's storage
+  dependencies (CloudNativePG Postgres + cross-namespace PVCs) on the app page.
+- **v0.7.1** — fix: tracing any single component highlights the whole app group.
+- **v0.8.0** — label-driven source grouping in the collector (drop the hardcoded
+  repo→components map; derive the grouping from resource labels).
+- **v0.8.1** — fix: keep Components as workload names so the flow highlight and
+  the build-lane group box render correctly.
+- _(repo)_ stopped tracking the built `bin/landscape` in git and added a
+  `.gitignore` (#15) — the image is built from source by CI, never the committed
+  binary.
+- **v0.8.2** — map layout: the build lane shows the image tag inline with the
+  name (`name:tag`); the cluster lane is transposed so each app namespace is a
+  row whose workloads are a single horizontal strip (scrolls sideways), the
+  namespace list scrolls vertically, and the 4-lane map is bounded to the
+  viewport (each lane scrolls its own overflow).
+- **v0.8.3** — fix: collapse the top-bar nav to icons on small screens (≤640px)
+  so it no longer overflows the viewport — no horizontal page scroll on phones.
 
 ## Later
 

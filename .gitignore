@@ -1,0 +1,3 @@
+# Build output — `make build` writes the binary here; deploys build from source
+# (deploy.yml → GHCR image), so the binary is never committed.
+/bin/

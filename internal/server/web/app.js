@@ -349,8 +349,7 @@ function renderMap(v) {
   const imgCardHTML = im => {
     const [nm, tag] = String(im.name).split(":");
     return `<div class="card appflow" data-id="${esc(im.id)}" data-app="${esc(im.app || "")}">
-      <div class="mono img-name" style="font-size:11.5px">${esc(nm)}</div>
-      <div class="mono img-name" style="font-size:11px;color:var(--teal);margin-top:2px">:${esc(tag || "")}</div></div>`;
+      <div class="mono img-name" style="font-size:11.5px">${esc(nm)}<span style="color:var(--teal)">${tag ? ":" + esc(tag) : ""}</span></div></div>`;
   };
   const compToRepo = {};
   appRepos.forEach(r => (r.components || []).forEach(c => { compToRepo[c] = r; }));
@@ -401,10 +400,10 @@ function renderMap(v) {
   const nsBoxes = nsApps.map(ns => {
     const list = (appsByNs[ns.name] || []);
     const cardsH = list.map(a => appCardHTML(a)).join("") ||
-      `<div class="mono" style="font-size:11px;color:var(--mut);margin-top:8px">no owned workloads</div>`;
+      `<div class="mono" style="font-size:11px;color:var(--mut)">no owned workloads</div>`;
     return `<div class="ns-box">
       <div class="nsh"><span class="kind" style="color:var(--dim)">ns · ${esc(ns.name)}</span><span class="rdy">● Ready</span></div>
-      ${cardsH}</div>`;
+      <div class="ns-cards hscroll">${cardsH}</div></div>`;
   }).join("");
   const platCards = nsPlat.map(ns => {
     const hid = "plns/" + ns.name;
@@ -420,7 +419,7 @@ function renderMap(v) {
     <div class="clusterbody">
       <div class="traefik-rail" title="Open Traefik routing">${icon("ingress", 18, "#35d0c0")}<div class="vt">Traefik · :443 TLS</div></div>
       <div class="clustercol">
-        <div class="nsrow hscroll">${nsBoxes}</div>
+        <div class="nsrow">${nsBoxes}</div>
         <div class="platform-box"><span class="kind" style="color:var(--dim)">platform namespaces</span><div class="platform-grid hscroll">${platCards}</div></div>
         <div class="footer-note" id="storagelink" style="cursor:pointer" title="Open the storage view">${icon("clock", 13, "#616b7a")} Longhorn + local-path PVCs · CloudNativePG Postgres · airlift sessions ephemeral</div>
       </div>

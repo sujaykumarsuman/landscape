@@ -113,18 +113,24 @@ button{font-family:var(--sans)}
   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:12px 0}
 .traefik-rail .vt{writing-mode:vertical-rl;transform:rotate(180deg);font-size:11px;color:var(--dim);letter-spacing:.5px;white-space:nowrap}
 .clustercol{flex:1;display:flex;flex-direction:column;gap:10px;min-width:0}
-.nsrow{display:flex;gap:10px;flex-wrap:nowrap;overflow-x:auto;min-width:0;padding-bottom:2px}
-.ns-box{flex:1 0 200px;min-width:0;border:1px dashed var(--line2);border-radius:10px;padding:10px}
+/* each app namespace is a full-width row; its workloads sit in a single
+   horizontal strip (.ns-cards) that scrolls sideways rather than wrapping or
+   stacking. The row list itself scrolls vertically once it fills the lane
+   (see the min-width:1081px block below). */
+.nsrow{display:flex;flex-direction:column;gap:10px;min-width:0}
+.ns-box{min-width:0;border:1px dashed var(--line2);border-radius:10px;padding:10px}
+.ns-cards{display:flex;flex-wrap:nowrap;gap:10px;margin-top:8px;min-width:0;overflow-x:auto}
 
-/* thin, theme-matched horizontal scrollbar */
-.hscroll{scrollbar-width:thin;scrollbar-color:var(--line2) transparent}
+/* thin, theme-matched scrollbars (horizontal strips + the vertical ns list) */
+.hscroll,.nsrow{scrollbar-width:thin;scrollbar-color:var(--line2) transparent}
 .hscroll::-webkit-scrollbar{height:6px}
-.hscroll::-webkit-scrollbar-track{background:transparent}
-.hscroll::-webkit-scrollbar-thumb{background:var(--line2);border-radius:3px}
-.hscroll::-webkit-scrollbar-thumb:hover{background:#3a4454}
+.nsrow::-webkit-scrollbar{width:6px}
+.hscroll::-webkit-scrollbar-track,.nsrow::-webkit-scrollbar-track{background:transparent}
+.hscroll::-webkit-scrollbar-thumb,.nsrow::-webkit-scrollbar-thumb{background:var(--line2);border-radius:3px}
+.hscroll::-webkit-scrollbar-thumb:hover,.nsrow::-webkit-scrollbar-thumb:hover{background:#3a4454}
 .ns-box .nsh{display:flex;align-items:center;justify-content:space-between}
 .ns-box .nsh .rdy{font-size:10px;color:var(--ok)}
-.app-card{margin-top:8px;border-radius:8px;padding:10px;cursor:pointer;background:#131c1c;border:1px solid rgba(53,208,192,.4);transition:border-color .14s,box-shadow .14s}
+.app-card{flex:0 0 200px;border-radius:8px;padding:10px;cursor:pointer;background:#131c1c;border:1px solid rgba(53,208,192,.4);transition:border-color .14s,box-shadow .14s}
 .app-card.violet{background:#171622;border-color:rgba(155,140,240,.35)}
 .app-card:hover{box-shadow:0 0 0 1px rgba(53,208,192,.35)}
 .app-card .ah{display:flex;align-items:center;justify-content:space-between;gap:8px}
@@ -345,6 +351,18 @@ button{font-family:var(--sans)}
   #gedges,#tfedges{display:none}
   .tfgraph{grid-template-columns:1fr;gap:20px}
   .tfsource{position:static}
+}
+/* desktop (side-by-side lanes): keep the pipeline within the viewport instead
+   of growing the page. Each lane body scrolls its own overflow vertically; the
+   cluster lane's namespace list scrolls vertically while each namespace's
+   workloads scroll horizontally (.ns-cards). */
+@media(min-width:1081px){
+  .map{max-height:calc(100vh - 168px)}
+  .lane{min-height:0}
+  .lanebody{flex:1;min-height:0;overflow-y:auto}
+  .clusterbody{flex:1;min-height:0}
+  .clustercol{min-height:0}
+  .nsrow{flex:1;min-height:0;overflow-y:auto}
 }
 /* below 1080px the 4-lane pipeline stacks vertically (full-width lanes read
    better than four cramped columns); flow arrows rotate to point down */

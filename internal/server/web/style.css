@@ -32,12 +32,17 @@ button{font-family:var(--sans)}
 /* ---------- top bar ---------- */
 #top{display:flex;align-items:center;height:56px;padding:0 20px;border-bottom:1px solid var(--line);background:#0c0f14;gap:0}
 .brand{display:flex;align-items:center;gap:9px;font-weight:600}
-.nav{display:flex;gap:4px;margin-left:26px}
-.nav button{height:30px;padding:0 13px;border:none;background:none;color:var(--dim);font-size:13.5px;border-radius:7px;cursor:pointer}
+/* Desktop: text nav. Small screens: icon-only (see the max-width:640 block) so
+   the four items fit. min-width:0 + overflow-x is a silent guard so the bar can
+   never push the page wider than the viewport (brand + rightbar keep their size). */
+.nav{display:flex;gap:4px;margin-left:26px;min-width:0;overflow-x:auto;scrollbar-width:none}
+.nav::-webkit-scrollbar{display:none}
+.nav button{flex:none;display:inline-flex;align-items:center;justify-content:center;gap:7px;height:30px;padding:0 13px;border:none;background:none;color:var(--dim);font-size:13.5px;border-radius:7px;cursor:pointer}
+.nav button .ni{display:none}
 .nav button.on{background:rgba(53,208,192,.12);color:var(--teal);font-weight:500}
-#crumb{display:flex;align-items:center;gap:8px;margin-left:22px;color:var(--dim);font-size:13.5px}
-#crumb .sep{display:flex;color:var(--line2)}
-#crumb .cur{color:var(--text);font-weight:500}
+#crumb{display:flex;align-items:center;gap:8px;margin-left:22px;color:var(--dim);font-size:13.5px;min-width:0}
+#crumb .sep{display:flex;color:var(--line2);flex:none}
+#crumb .cur{color:var(--text);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #crumb .home{color:var(--dim);cursor:pointer}
 #crumb .home:hover{color:var(--teal)}
 .rightbar{display:flex;align-items:center;gap:16px}
@@ -379,7 +384,10 @@ button{font-family:var(--sans)}
   #top{padding:0 12px}
   .brand{gap:0;font-size:0}
   .nav{margin-left:8px}
-  .nav button{padding:0 10px}
+  /* icon-only nav: hide the labels, show the glyphs so all four fit */
+  .nav button{padding:0 9px}
+  .nav button .nl{display:none}
+  .nav button .ni{display:block}
   #crumb{margin-left:10px}
   .rightbar{gap:8px}
   #usage{display:none}

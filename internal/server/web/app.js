@@ -421,7 +421,7 @@ function renderMap(v) {
       <div class="clustercol">
         <div class="nsrow">${nsBoxes}</div>
         <div class="platform-box"><span class="kind" style="color:var(--dim)">platform namespaces</span><div class="platform-grid hscroll">${platCards}</div></div>
-        <div class="footer-note" id="storagelink" style="cursor:pointer" title="Open the storage view">${icon("clock", 13, "#616b7a")} Longhorn + local-path PVCs · CloudNativePG Postgres · airlift sessions ephemeral</div>
+        <div class="footer-note" id="storagelink" style="cursor:pointer" title="Open the storage view">${icon("clock", 13, "#616b7a")} Longhorn PVCs · CloudNativePG Postgres · airlift sessions ephemeral</div>
       </div>
     </div></div>`;
 
@@ -744,7 +744,7 @@ function appGraphHTML(d) {
   const left = [];
   (d.configMaps || []).forEach((r, i) => left.push(gnode("cm" + i, "configMap", "ConfigMap", esc(r.name), esc(r.origin || ""))));
   (d.secrets || []).forEach((r, i) => left.push(gnode("sec" + i, "secret", "Secret" + (r.sops ? " · SOPS" : ""), esc(r.name), esc(r.origin || ""), "warnb")));
-  (d.pvcs || []).forEach((r, i) => left.push(gnode("pvc" + i, "pvc", "PVC · local-path", esc(r.name), esc(r.detail || r.origin || ""))));
+  (d.pvcs || []).forEach((r, i) => left.push(gnode("pvc" + i, "pvc", "PVC", esc(r.name), esc(r.detail || r.origin || ""))));
   // External backing services (CNPG Postgres, …): a network dependency plus its
   // cross-namespace PVCs — the app's real persistence, not a mounted volume.
   (d.dependencies || []).forEach((dp, j) => {

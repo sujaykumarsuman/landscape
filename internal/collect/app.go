@@ -138,6 +138,9 @@ func (co *Collector) AppDetail(ctx context.Context, name string) (*model.AppDeta
 				am = string(pvc.Spec.AccessModes[0])
 			}
 			det.PVCs[i].Detail = strings.TrimSpace(sz.String() + " · " + am)
+			if sc := pvc.Spec.StorageClassName; sc != nil && *sc != "" {
+				det.PVCs[i].Detail += " · " + *sc
+			}
 		}
 	}
 

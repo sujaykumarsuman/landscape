@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+func init() { loginFailDelay = 0 } // keep the failure brake out of test runtime
+
 func testServer(t *testing.T) (*Server, *time.Time) {
 	t.Helper()
 	now := time.Unix(1_800_000_000, 0)
@@ -276,5 +278,36 @@ func TestShellBaseHref(t *testing.T) {
 	}
 	if rr := get("/api/nope", ""); rr.Code != http.StatusNotFound {
 		t.Errorf("unknown api path = %d, want 404", rr.Code)
+	}
+}
+
+// Failed logins are capped process-wide (the password is shared with kubescope):
+// a burst, then a 429 with Retry-After — even for the right password — until
+// the budget refills; successful logins don't spend it.
+func TestLoginRateLimited(t *testing.T) {
+	s, now := testServer(t)
+	h := s.Handler()
+	post := func(pw string) *httptest.ResponseRecorder {
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(`{"password":"`+pw+`"}`)))
+		return rr
+	}
+	for i := 0; i < 3; i++ {
+		if rr := post("hunter2"); rr.Code != http.StatusOK {
+			t.Fatalf("success %d = %d", i, rr.Code)
+		}
+	}
+	for i := 0; i < loginFailBurst; i++ {
+		if rr := post("nope"); rr.Code != http.StatusUnauthorized {
+			t.Fatalf("failure %d = %d, want 401", i, rr.Code)
+		}
+	}
+	rr := post("hunter2")
+	if rr.Code != http.StatusTooManyRequests || rr.Header().Get("Retry-After") == "" {
+		t.Fatalf("exhausted budget = %d (Retry-After %q), want 429", rr.Code, rr.Header().Get("Retry-After"))
+	}
+	*now = now.Add(loginFailEvery)
+	if rr := post("hunter2"); rr.Code != http.StatusOK {
+		t.Fatalf("after refill = %d, want 200", rr.Code)
 	}
 }

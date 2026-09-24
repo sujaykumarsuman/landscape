@@ -1,5 +1,6 @@
 // Package server exposes the read-only landscape API and the embedded UI, behind
-// an admin-password gate.
+// an admin-password gate. The same session also gates other in-cluster UIs
+// (Longhorn, kubescope) through Traefik ForwardAuth (GET /api/forward-auth).
 package server
 
 import (
@@ -10,6 +11,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
@@ -35,13 +37,26 @@ type Options struct {
 	PublicURL     string
 	Version       string
 	CacheTTL      time.Duration
+	// Tools are the UIs gated by this console's session via Traefik ForwardAuth
+	// (e.g. Longhorn, kubescope), listed in the top-bar Tools menu once signed in.
+	Tools []Tool
 }
+
+// Tool is a gated UI linked from the console (LANDSCAPE_TOOLS).
+type Tool struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+	Desc string `json:"desc,omitempty"`
+}
+
+// sessionTTL bounds a session server-side (and the cookie's browser lifetime).
+const sessionTTL = 12 * time.Hour
 
 // Server serves the API + UI.
 type Server struct {
-	opt   Options
-	col   *collect.Collector
-	token string
+	opt Options
+	col *collect.Collector
+	now func() time.Time
 
 	mu        sync.Mutex
 	graph     *model.Graph
@@ -71,14 +86,40 @@ func New(col *collect.Collector, opt Options) *Server {
 	if opt.CacheTTL == 0 {
 		opt.CacheTTL = 10 * time.Second
 	}
-	return &Server{opt: opt, col: col, token: sessionToken(opt.AdminPassword),
+	return &Server{opt: opt, col: col, now: time.Now,
 		apps: map[string]appEntry{}, misc: map[string]cacheEntry{}}
 }
 
-func sessionToken(pw string) string {
-	mac := hmac.New(sha256.New, []byte("landscape-session/"+pw))
-	mac.Write([]byte("v1"))
+// Session tokens are stateless and expiring: "v2.<expiry unix>.<hmac>", where the
+// HMAC is keyed by the admin password over "v2.<expiry>". They survive restarts
+// and redeploys (no server state), expire server-side after sessionTTL even if
+// the cookie is copied out of the browser, and all die when the password rotates.
+func (s *Server) sign(exp int64) string {
+	mac := hmac.New(sha256.New, []byte("landscape-session/"+s.opt.AdminPassword))
+	mac.Write([]byte("v2." + strconv.FormatInt(exp, 10)))
 	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func (s *Server) mintToken() string {
+	exp := s.now().Add(sessionTTL).Unix()
+	return "v2." + strconv.FormatInt(exp, 10) + "." + s.sign(exp)
+}
+
+func (s *Server) validToken(tok string) bool {
+	parts := strings.Split(tok, ".")
+	if len(parts) != 3 || parts[0] != "v2" {
+		return false
+	}
+	exp, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return false
+	}
+	now := s.now()
+	// expired, or implausibly far out (a token is never minted beyond one TTL)
+	if now.Unix() >= exp || exp > now.Add(sessionTTL+time.Minute).Unix() {
+		return false
+	}
+	return hmac.Equal([]byte(parts[2]), []byte(s.sign(exp)))
 }
 
 // Handler builds the HTTP router.
@@ -89,6 +130,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/session", s.sessionH)
 	mux.HandleFunc("/api/login", s.loginH)
 	mux.HandleFunc("/api/logout", s.logoutH)
+	// Traefik ForwardAuth target (unauthenticated by design: it IS the check).
+	mux.HandleFunc("/api/forward-auth", s.forwardAuthH)
 	mux.HandleFunc("/api/graph", s.requireAuth(s.graphH))
 	mux.HandleFunc("/api/metrics", s.requireAuth(s.metricsH))
 	mux.HandleFunc("GET /api/app/{name}", s.requireAuth(s.appH))
@@ -140,7 +183,7 @@ func (s *Server) authed(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	return subtle.ConstantTimeCompare([]byte(c.Value), []byte(s.token)) == 1
+	return s.validToken(c.Value)
 }
 
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
@@ -160,7 +203,110 @@ func (s *Server) infoH(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) sessionH(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"authed": s.authed(r)})
+	if !s.authed(r) {
+		writeJSON(w, http.StatusOK, map[string]any{"authed": false})
+		return
+	}
+	tools := s.opt.Tools
+	if tools == nil {
+		tools = []Tool{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"authed": true, "tools": tools})
+}
+
+// forwardAuthH is the Traefik ForwardAuth target that gates other in-cluster UIs
+// (Longhorn, kubescope) behind this console's session. Traefik sends the original
+// request's headers (so the ls_session cookie, Path=/, comes along) plus
+// X-Forwarded-Method/-Uri; a 2xx lets the request through to the gated UI, and
+// anything else is returned to the browser as-is. So: a page navigation without a
+// session is redirected to the login with ?next=<where it was going>, while
+// XHR/fetch/WebSocket/non-GET requests get a plain 401.
+func (s *Server) forwardAuthH(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if s.authed(r) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if wantsHTML(r) {
+		w.Header().Set("Location", s.loginURL(r.Header.Get("X-Forwarded-Uri")))
+		w.WriteHeader(http.StatusFound)
+		return
+	}
+	writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+}
+
+// wantsHTML reports whether the gated request is a browser page navigation (worth
+// redirecting to the login) rather than an API/asset/WebSocket call.
+func wantsHTML(r *http.Request) bool {
+	m := r.Header.Get("X-Forwarded-Method")
+	if m == "" {
+		m = r.Method
+	}
+	if m != http.MethodGet && m != http.MethodHead {
+		return false
+	}
+	if mode := r.Header.Get("Sec-Fetch-Mode"); mode != "" {
+		return mode == "navigate"
+	}
+	return strings.Contains(r.Header.Get("Accept"), "text/html")
+}
+
+// loginURL is the console's login page (the mount path of LANDSCAPE_PUBLIC_URL),
+// carrying the gated URL to return to after sign-in when it is a safe local path.
+func (s *Server) loginURL(next string) string {
+	base := "/"
+	if u, err := url.Parse(s.opt.PublicURL); err == nil && u.Path != "" {
+		base = strings.TrimSuffix(u.Path, "/") + "/"
+	}
+	if safeNext(next) {
+		return base + "?next=" + url.QueryEscape(next)
+	}
+	return base
+}
+
+// safeNext accepts only a same-host absolute path ("/x…"): never "//host" or
+// "/\host" (browsers read both as another host), nor control characters — so
+// ?next can't be turned into an open redirect. The UI re-checks before following.
+func safeNext(p string) bool {
+	if p == "" || len(p) > 2048 || p[0] != '/' {
+		return false
+	}
+	if len(p) > 1 && (p[1] == '/' || p[1] == '\\') {
+		return false
+	}
+	for i := 0; i < len(p); i++ {
+		if p[i] < 0x20 || p[i] == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// ParseTools reads LANDSCAPE_TOOLS: a JSON list of {name, url, desc}. A URL must
+// be a local absolute path (/longhorn/) or an https:// URL; bad entries are
+// skipped and reported, never fatal.
+func ParseTools(raw string) ([]Tool, []string) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	var in []Tool
+	if err := json.Unmarshal([]byte(raw), &in); err != nil {
+		return nil, []string{"LANDSCAPE_TOOLS: " + err.Error()}
+	}
+	var out []Tool
+	var bad []string
+	for _, t := range in {
+		t.Name, t.URL = strings.TrimSpace(t.Name), strings.TrimSpace(t.URL)
+		u, err := url.Parse(t.URL)
+		local := safeNext(t.URL)
+		remote := err == nil && u.Scheme == "https" && u.Host != ""
+		if t.Name == "" || (!local && !remote) {
+			bad = append(bad, fmt.Sprintf("LANDSCAPE_TOOLS: skipping %q (%q): need a name and a /path or https:// URL", t.Name, t.URL))
+			continue
+		}
+		out = append(out, t)
+	}
+	return out, bad
 }
 
 func (s *Server) loginH(w http.ResponseWriter, r *http.Request) {
@@ -177,15 +323,17 @@ func (s *Server) loginH(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "wrong password"})
 		return
 	}
+	// Path=/ so the cookie also reaches the ForwardAuth-gated UIs on this host.
 	http.SetCookie(w, &http.Cookie{
-		Name: "ls_session", Value: s.token, Path: "/", HttpOnly: true, Secure: true,
-		SameSite: http.SameSiteLaxMode, MaxAge: 12 * 3600,
+		Name: "ls_session", Value: s.mintToken(), Path: "/", HttpOnly: true, Secure: true,
+		SameSite: http.SameSiteLaxMode, MaxAge: int(sessionTTL / time.Second),
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (s *Server) logoutH(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{Name: "ls_session", Value: "", Path: "/", HttpOnly: true, MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{Name: "ls_session", Value: "", Path: "/", HttpOnly: true, Secure: true,
+		SameSite: http.SameSiteLaxMode, MaxAge: -1})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

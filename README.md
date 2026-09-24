@@ -30,6 +30,13 @@ Live at **https://projects.sujaykumar.dev/landscape** (deployed by GitOps —
 It distinguishes **your services** (your GitHub repos / GHCR) from **infra
 tools** (Flux, cert-manager, Traefik — linked to their docs).
 
+- **Auth gateway for other UIs** — the same admin session gates other in-cluster
+  consoles (Longhorn at `/longhorn/`, kubescope at `/kubescope/`) through Traefik
+  **ForwardAuth**: their IngressRoutes call `GET /api/forward-auth`, which lets a
+  signed-in request through and sends anyone else to the login with
+  `?next=<where they were going>`, then back after sign-in. A top-bar **Tools** menu
+  links to them (`LANDSCAPE_TOOLS`). Landscape itself stays read-only.
+
 ## Docs
 
 `CLAUDE.md` (repo rules + the read-only invariant), `docs/ARCHITECTURE.md`,
@@ -50,8 +57,9 @@ Flux git source and repo conventions. Nothing is written to the cluster.
 | --- | --- | --- |
 | `LANDSCAPE_ADMIN_PASSWORD` | — | required; gates the console (a SOPS Secret in GitOps) |
 | `LANDSCAPE_LISTEN` | `0.0.0.0:8080` | listen address |
-| `LANDSCAPE_GITHUB_OWNER` | `sujaykumarsuman` | owner used to detect "your" images/repos |
-| `LANDSCAPE_PUBLIC_URL` | — | advertised URL (display only) |
+| `LANDSCAPE_GITHUB_OWNER` | `sujaykumarsuman` | owner(s) whose GHCR images are "yours" — a comma list; the first is primary (shared `.github` workflows), e.g. `sujaykumarsuman,skriptvalley` |
+| `LANDSCAPE_PUBLIC_URL` | — | advertised URL; its path is also where ForwardAuth sends signed-out users to log in |
+| `LANDSCAPE_TOOLS` | — | JSON list of gated UIs for the Tools menu: `[{"name":"Longhorn","url":"/longhorn/","desc":"…"}]` (a `/path` or `https://` URL) |
 
 ## Develop
 

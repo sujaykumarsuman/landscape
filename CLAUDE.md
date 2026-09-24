@@ -53,11 +53,22 @@ resource/verb, add it to `apps/landscape.yaml` in the infra repo (chart
 
 ## HTTP surface
 
-Public: `GET /healthz`, `GET /api/info`. Auth (POST) `/api/login`, `/api/logout`,
-`/api/session`. Behind the `ls_session` cookie: `GET /api/graph`,
-`GET /api/metrics`, `GET /api/app/{name}`, `GET /api/traefik`. Everything else is
-the embedded UI at `/`. Auth = HMAC-SHA256 of the admin password (deterministic,
-so the cookie survives restarts/redeploys; 12 h browser lifetime). The admin
+Public: `GET /healthz`, `GET /api/info`, `GET /api/forward-auth`. Auth (POST)
+`/api/login`, `/api/logout`, `/api/session` (lists the Tools once signed in).
+Behind the `ls_session` cookie: `GET /api/graph`, `GET /api/metrics`,
+`GET /api/app/{name}`, `GET /api/traefik`, … Everything else is the embedded UI
+at `/`. Session = a stateless, expiring token `v2.<expiry>.<HMAC-SHA256 keyed by
+the admin password>` — survives restarts/redeploys, **expires server-side after
+12 h** (also the cookie lifetime), and all sessions die when the password
+rotates. The cookie is `Path=/` so it also reaches the gated UIs on the host.
+
+**Auth gateway.** `/api/forward-auth` is the Traefik ForwardAuth target that gates
+other UIs (Longhorn `/longhorn/`, kubescope `/kubescope/` — IngressRoutes in the
+infra repo): 204 when the session is valid; otherwise a page navigation gets a
+302 to the login with `?next=<X-Forwarded-Uri>` (same-host paths only — checked
+server-side and again in the UI before following) and API/WebSocket/non-GET calls
+get a 401. The gated UIs' own powers (kubescope runs cluster-admin) are theirs,
+not landscape's — landscape's ServiceAccount stays read-only. The admin
 password is a SOPS secret (`apps/secrets/landscape-admin.enc.yaml` in infra),
 rotated with `sops` — there is deliberately **no in-app password change** (it
 would fight the GitOps/SOPS source of truth).

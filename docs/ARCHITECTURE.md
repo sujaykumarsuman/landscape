@@ -91,10 +91,16 @@ tail of pod stdout — lines + container/pod pickers).
 `Handler()` wires routes; `staticHandler()` serves the embedded `web/` FS and
 falls back to `index.html` for unknown non-API paths so the client-side router
 handles deep-links (`/landscape/<app>`, `/landscape/metrics`…); real assets serve
-as files and unknown `/api/*` paths 404. Auth: `authed(r)` constant-time-compares
-the `ls_session` cookie against `sessionToken(pw)` =
-`HMAC-SHA256("landscape-session/"+pw, "v1")` (deterministic ⇒ survives restarts;
-12 h cookie). Read endpoints have small `s.mu`-guarded caches with `CacheTTL`
+as files and unknown `/api/*` paths 404. Auth: `authed(r)` validates the
+`ls_session` cookie as `v2.<expiry>.<hex HMAC-SHA256("landscape-session/"+pw,
+"v2.<expiry>")>` (`mintToken`/`validToken`) — stateless ⇒ survives restarts,
+expires server-side after `sessionTTL` (12 h, also the cookie `MaxAge`), rejects
+far-future expiries. `forwardAuthH` (`GET /api/forward-auth`) is the Traefik
+ForwardAuth target for the gated UIs (Longhorn, kubescope): 204 when authed, else
+302 → login `?next=<X-Forwarded-Uri>` for page navigations (`wantsHTML`:
+`Sec-Fetch-Mode: navigate`, else `Accept: text/html`, GET/HEAD only) and 401 for
+everything else; `safeNext` keeps `next` a same-host path. `Tools` (from
+`LANDSCAPE_TOOLS`, `ParseTools`) are returned by `/api/session` when signed in. Read endpoints have small `s.mu`-guarded caches with `CacheTTL`
 (default 10 s): `graph`, `metrics`, `apps[name]`, `traefik`, and a keyed `misc`
 cache for `events` / per-app events. Logs are **not** cached (each request is a
 fresh tail). `PublicURL`'s host fills per-route/app public URLs.
@@ -125,7 +131,10 @@ the render functions per view:
   + debounced free-text search + a capped scrollable list (`eventsListHTML` is
   shared with the app-detail Events tab).
 - A top-right menu (next to the profile) jumps to the combined browser / recent
-  warnings, keyboard-accessible (`wireMenu`).
+  warnings, keyboard-accessible (`wireMenu`). A **Tools** menu (`loadTools`) lists
+  the ForwardAuth-gated UIs (new tab). On load/sign-in, `followNext` returns to a
+  validated `?next=` path (`nextTarget`), with a 10 s same-target guard so a
+  gated UI that still refuses can't cause a redirect loop.
 - SVG edges are computed from DOM rects and redrawn on resize; `anchor(a,b)`
   picks vertical/horizontal attachment points.
 

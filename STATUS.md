@@ -66,7 +66,8 @@ _Last updated: 2026-09-24 (v0.9.0)._
   ForwardAuth target — 204 / 302 to login with `?next=` / 401) gates Longhorn and
   kubescope behind the admin session; login returns to `?next`; a top-bar
   **Tools** menu (`LANDSCAPE_TOOLS`). Sessions are now **expiring** stateless
-  tokens (12 h server-side; everyone signs in once after the upgrade).
+  tokens (12 h server-side; everyone signs in once after the upgrade), signed
+  with PBKDF2(password) + an optional random `LANDSCAPE_SESSION_KEY` (SOPS).
   `LANDSCAPE_GITHUB_OWNER` takes a comma list so `skriptvalley/*` images render
   as your apps; the `sujaykumar.dev/source-workflow` label fixes the workflow
   deep-link for repos not built by `deploy.yml` (kubescope → `release.yml`).

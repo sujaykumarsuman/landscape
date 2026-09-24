@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/pbkdf2"
 	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
@@ -40,6 +41,10 @@ type Options struct {
 	// Tools are the UIs gated by this console's session via Traefik ForwardAuth
 	// (e.g. Longhorn, kubescope), listed in the top-bar Tools menu once signed in.
 	Tools []Tool
+	// SessionKey is an optional random secret (LANDSCAPE_SESSION_KEY) mixed into
+	// the session-signing key, so a leaked token can't be brute-forced offline
+	// for the admin password. Rotating it (or the password) ends every session.
+	SessionKey string
 }
 
 // Tool is a gated UI linked from the console (LANDSCAPE_TOOLS).
@@ -54,9 +59,10 @@ const sessionTTL = 12 * time.Hour
 
 // Server serves the API + UI.
 type Server struct {
-	opt Options
-	col *collect.Collector
-	now func() time.Time
+	opt     Options
+	col     *collect.Collector
+	now     func() time.Time
+	signKey []byte // session HMAC key, derived once in New (see signingKey)
 
 	mu        sync.Mutex
 	graph     *model.Graph
@@ -86,16 +92,34 @@ func New(col *collect.Collector, opt Options) *Server {
 	if opt.CacheTTL == 0 {
 		opt.CacheTTL = 10 * time.Second
 	}
-	return &Server{opt: opt, col: col, now: time.Now,
+	return &Server{opt: opt, col: col, now: time.Now, signKey: signingKey(opt.AdminPassword, opt.SessionKey),
 		apps: map[string]appEntry{}, misc: map[string]cacheEntry{}}
 }
 
-// Session tokens are stateless and expiring: "v2.<expiry unix>.<hmac>", where the
-// HMAC is keyed by the admin password over "v2.<expiry>". They survive restarts
-// and redeploys (no server state), expire server-side after sessionTTL even if
-// the cookie is copied out of the browser, and all die when the password rotates.
+// signingKey derives the session HMAC key from the admin password with PBKDF2
+// (a guess against a leaked token costs a full derivation, not one HMAC) mixed
+// with the optional random LANDSCAPE_SESSION_KEY (which makes offline guessing
+// hopeless). Deterministic, so sessions survive restarts; rotating either input
+// ends every session. Computed once at startup.
+func signingKey(pw, sessionKey string) []byte {
+	if pw == "" {
+		return nil // no admin password: authed() refuses everything anyway
+	}
+	dk, err := pbkdf2.Key(sha256.New, pw, []byte("landscape-session/v2"), 600_000, 32)
+	if err != nil {
+		panic("pbkdf2: " + err.Error()) // only on invalid parameters, which are constant
+	}
+	mac := hmac.New(sha256.New, []byte(sessionKey))
+	mac.Write(dk)
+	return mac.Sum(nil)
+}
+
+// Session tokens are stateless and expiring: "v2.<expiry unix>.<hmac>", the HMAC
+// over "v2.<expiry>" under signKey. They survive restarts and redeploys (no
+// server state), expire server-side after sessionTTL even if the cookie is copied
+// out of the browser, and all die when the password or session key rotates.
 func (s *Server) sign(exp int64) string {
-	mac := hmac.New(sha256.New, []byte("landscape-session/"+s.opt.AdminPassword))
+	mac := hmac.New(sha256.New, s.signKey)
 	mac.Write([]byte("v2." + strconv.FormatInt(exp, 10)))
 	return hex.EncodeToString(mac.Sum(nil))
 }
@@ -111,7 +135,7 @@ func (s *Server) validToken(tok string) bool {
 		return false
 	}
 	exp, err := strconv.ParseInt(parts[1], 10, 64)
-	if err != nil {
+	if err != nil || parts[1] != strconv.FormatInt(exp, 10) { // canonical form only
 		return false
 	}
 	now := s.now()
@@ -228,7 +252,9 @@ func (s *Server) forwardAuthH(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if wantsHTML(r) {
-		w.Header().Set("Location", s.loginURL(r.Header.Get("X-Forwarded-Uri")))
+		// Absolute on purpose: Traefik resolves a relative Location against the
+		// auth address (the in-cluster service), not the page the user asked for.
+		w.Header().Set("Location", s.loginURL(r))
 		w.WriteHeader(http.StatusFound)
 		return
 	}
@@ -251,17 +277,32 @@ func wantsHTML(r *http.Request) bool {
 	return strings.Contains(r.Header.Get("Accept"), "text/html")
 }
 
-// loginURL is the console's login page (the mount path of LANDSCAPE_PUBLIC_URL),
-// carrying the gated URL to return to after sign-in when it is a safe local path.
-func (s *Server) loginURL(next string) string {
-	base := "/"
-	if u, err := url.Parse(s.opt.PublicURL); err == nil && u.Path != "" {
+// loginURL is the console's absolute login URL — LANDSCAPE_PUBLIC_URL, else the
+// scheme/host Traefik forwarded (it overwrites client X-Forwarded-* with
+// trustForwardHeader off) — carrying the gated path to return to after sign-in
+// (X-Forwarded-Uri) when it is a safe same-host path.
+func (s *Server) loginURL(r *http.Request) string {
+	origin, base := "", "/"
+	if u, err := url.Parse(s.opt.PublicURL); err == nil && u.Host != "" {
+		origin = u.Scheme + "://" + u.Host
 		base = strings.TrimSuffix(u.Path, "/") + "/"
+	} else if h := r.Header.Get("X-Forwarded-Host"); h != "" && safeHost(h) {
+		proto := r.Header.Get("X-Forwarded-Proto")
+		if proto != "http" {
+			proto = "https"
+		}
+		origin = proto + "://" + h
 	}
-	if safeNext(next) {
-		return base + "?next=" + url.QueryEscape(next)
+	if next := r.Header.Get("X-Forwarded-Uri"); safeNext(next) {
+		return origin + base + "?next=" + url.QueryEscape(next)
 	}
-	return base
+	return origin + base
+}
+
+// safeHost accepts a bare host[:port] (no path, userinfo or control characters).
+func safeHost(h string) bool {
+	u, err := url.Parse("https://" + h)
+	return err == nil && u.Host == h && u.User == nil && u.Path == "" && !strings.ContainsAny(h, "\\ \t\r\n")
 }
 
 // safeNext accepts only a same-host absolute path ("/x…"): never "//host" or
@@ -579,7 +620,9 @@ func logMW(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		next.ServeHTTP(w, r)
-		if r.URL.Path != "/healthz" {
+		// /api/forward-auth runs on every request to the gated UIs (assets, API
+		// polls) — too chatty to log; its denials are visible at the browser.
+		if r.URL.Path != "/healthz" && r.URL.Path != "/api/forward-auth" {
 			log.Printf("%s %s %s", r.Method, r.URL.Path, time.Since(start).Round(time.Millisecond))
 		}
 	})

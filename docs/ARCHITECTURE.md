@@ -92,12 +92,16 @@ tail of pod stdout — lines + container/pod pickers).
 falls back to `index.html` for unknown non-API paths so the client-side router
 handles deep-links (`/landscape/<app>`, `/landscape/metrics`…); real assets serve
 as files and unknown `/api/*` paths 404. Auth: `authed(r)` validates the
-`ls_session` cookie as `v2.<expiry>.<hex HMAC-SHA256("landscape-session/"+pw,
-"v2.<expiry>")>` (`mintToken`/`validToken`) — stateless ⇒ survives restarts,
-expires server-side after `sessionTTL` (12 h, also the cookie `MaxAge`), rejects
-far-future expiries. `forwardAuthH` (`GET /api/forward-auth`) is the Traefik
+`ls_session` cookie as `v2.<expiry>.<hex HMAC-SHA256(signKey, "v2.<expiry>")>`
+(`mintToken`/`validToken`), where `signKey` = HMAC(`LANDSCAPE_SESSION_KEY`,
+PBKDF2-SHA256(pw, 600k)) is derived once in `New` (`signingKey`) — stateless ⇒
+survives restarts, expires server-side after `sessionTTL` (12 h, also the cookie
+`MaxAge`), rejects far-future and non-canonical expiries, and a leaked token is
+not a cheap offline oracle for the password. `forwardAuthH` (`GET /api/forward-auth`) is the Traefik
 ForwardAuth target for the gated UIs (Longhorn, kubescope): 204 when authed, else
-302 → login `?next=<X-Forwarded-Uri>` for page navigations (`wantsHTML`:
+302 → the **absolute** login URL (`loginURL`: `PublicURL`, else Traefik's
+`X-Forwarded-Proto/Host`; Traefik would resolve a relative one against the auth
+address) with `?next=<X-Forwarded-Uri>` for page navigations (`wantsHTML`:
 `Sec-Fetch-Mode: navigate`, else `Accept: text/html`, GET/HEAD only) and 401 for
 everything else; `safeNext` keeps `next` a same-host path. `Tools` (from
 `LANDSCAPE_TOOLS`, `ParseTools`) are returned by `/api/session` when signed in. Read endpoints have small `s.mu`-guarded caches with `CacheTTL`

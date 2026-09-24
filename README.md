@@ -56,6 +56,7 @@ Flux git source and repo conventions. Nothing is written to the cluster.
 | Var | Default | Meaning |
 | --- | --- | --- |
 | `LANDSCAPE_ADMIN_PASSWORD` | — | required; gates the console (a SOPS Secret in GitOps) |
+| `LANDSCAPE_SESSION_KEY` | — | optional random secret mixed into the session-signing key (SOPS Secret `landscape-session`), so a leaked cookie can't be brute-forced offline for the password; rotating it signs everyone out |
 | `LANDSCAPE_LISTEN` | `0.0.0.0:8080` | listen address |
 | `LANDSCAPE_GITHUB_OWNER` | `sujaykumarsuman` | owner(s) whose GHCR images are "yours" — a comma list; the first is primary (shared `.github` workflows), e.g. `sujaykumarsuman,skriptvalley` |
 | `LANDSCAPE_PUBLIC_URL` | — | advertised URL; its path is also where ForwardAuth sends signed-out users to log in |

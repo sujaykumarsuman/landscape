@@ -36,6 +36,9 @@ func main() {
 	if pw == "" {
 		log.Println("WARNING: LANDSCAPE_ADMIN_PASSWORD is unset — the console will refuse every login")
 	}
+	if os.Getenv("LANDSCAPE_SESSION_KEY") == "" {
+		log.Println("note: LANDSCAPE_SESSION_KEY is unset — sessions are signed from the admin password alone (PBKDF2)")
+	}
 	tools, bad := server.ParseTools(os.Getenv("LANDSCAPE_TOOLS"))
 	for _, b := range bad {
 		log.Println("WARNING:", b)
@@ -49,6 +52,7 @@ func main() {
 	srv := server.New(col, server.Options{
 		Addr: addr, AdminPassword: pw, GithubOwner: owner, PublicURL: pub,
 		Version: Version, CacheTTL: 10 * time.Second, Tools: tools,
+		SessionKey: os.Getenv("LANDSCAPE_SESSION_KEY"),
 	})
 
 	hs := &http.Server{Addr: addr, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}

@@ -82,9 +82,11 @@ Traefik's `X-Forwarded-Proto/Host`): Traefik resolves a relative `Location`
 against the auth address, i.e. the in-cluster service. Successful checks are not
 logged (they run on every gated request). The gated UI's own powers (the Longhorn UI can act on volumes) are its own,
 not landscape's — landscape's ServiceAccount stays read-only. The admin
-password is the shared SOPS secret `projects-admin` (key `ADMIN_PASSWORD`,
-`apps/secrets/projects-admin.enc.yaml` in infra, one copy per consuming
-namespace — kubescope signs in with it too), mapped to `LANDSCAPE_ADMIN_PASSWORD`;
+password is the shared credential `projects-admin` (key `ADMIN_PASSWORD`), owned
+by the **projects-hub** release in infra: its SOPS source
+(`apps/secrets/projects-admin.enc.yaml`) feeds the hub's `valuesFrom`, and the hub
+renders a copy into each consuming namespace (landscape, kubescope, airlift). It is
+mapped to `LANDSCAPE_ADMIN_PASSWORD`;
 rotated with `sops` — there is deliberately **no in-app password change** (it
 would fight the GitOps/SOPS source of truth).
 

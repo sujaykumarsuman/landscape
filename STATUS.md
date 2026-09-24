@@ -1,14 +1,15 @@
 # STATUS
 
-_Last updated: 2026-09-24 (v0.9.1)._
+_Last updated: 2026-09-24 (v0.10.0)._
 
 ## Live
 
-- **v0.9.1** at https://projects.sujaykumar.dev/landscape, deployed by GitOps
+- **v0.10.0** at https://projects.sujaykumar.dev/landscape, deployed by GitOps
   (Flux + Helm from `sujaykumarsuman/infra`, `apps/landscape.yaml`).
 - Read-only ClusterRole (see the invariant in `CLAUDE.md`). Admin-password gated
-  (SOPS secret `landscape-admin`). The same session gates Longhorn (`/longhorn/`)
-  and kubescope (`/kubescope/`) via Traefik ForwardAuth → `/api/forward-auth`.
+  (the shared SOPS secret `projects-admin`). The same session gates the Longhorn UI
+  (`/longhorn/`) via Traefik ForwardAuth → `/api/forward-auth`; kubescope has its
+  own sign-in with the same password.
 
 ## Done
 
@@ -75,6 +76,15 @@ _Last updated: 2026-09-24 (v0.9.1)._
   requests that another origin started, even with a valid session. `SameSite=Lax`
   lets sibling subdomains through, so this guards Longhorn and kubescope against
   forged form POSTs.
+- **v0.10.0** — **Longhorn page** (`/landscape/longhorn`, `GET /api/longhorn`):
+  Longhorn's CRs joined to PVCs and apps (volume health, replicas, size, snapshots,
+  last backup, deep-links), node disk capacity, recurring jobs and the backup target,
+  plus an **Open Longhorn UI** button. The Storage page gets a Longhorn card and a
+  per-PVC health column, and the map's `longhorn-system` card opens the page.
+  **App pages move to `/landscape/app/<name>`**, which frees `/landscape/<page>`;
+  legacy links are rewritten. The shell carries a `<base href>` for the mount. The
+  Tools menu and `LANDSCAPE_TOOLS` are removed: kubescope is now a plain app with
+  its own sign-in. RBAC gained `longhorn.io` get/list (read-only).
 
 ## Later
 

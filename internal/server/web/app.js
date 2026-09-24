@@ -6,7 +6,7 @@ const api = (p, o) => fetch("./api" + p, Object.assign({ headers: { "Content-Typ
 const cls = (st) => st === "ok" ? "ok" : st === "failed" ? "err" : "warn";
 
 const state = {
-  graph: null, metrics: null, view: "map", appName: null, app: null, traefik: null, storage: null, pin: null,
+  graph: null, metrics: null, view: "map", appName: null, app: null, traefik: null, storage: null, longhorn: null, pin: null,
   appTab: "graph", appEvents: null, appError: null, logs: null, events: null,
   eventsFilter: { ns: "", type: "", kind: "", q: "" },
   logsCtl: { container: "", tail: 500 },
@@ -26,6 +26,7 @@ window.addEventListener("popstate", () => {
   if (!started) return;
   const r = routeFromURL();
   applyRoute(r.view, r.appName);
+  if (pathFor(state.view, state.appName) !== location.pathname) history.replaceState(routeState(), "", pathFor(state.view, state.appName));
   syncChrome();
   render();
   refresh();
@@ -95,7 +96,6 @@ async function startApp() {
   applyRoute(r.view, r.appName);
   history.replaceState(routeState(), "", pathFor(state.view, state.appName));
   wireMenu();
-  loadTools();
   syncChrome();
   render();
   await refresh();
@@ -103,25 +103,32 @@ async function startApp() {
 }
 
 /* ---------- client-side router (History API) ----------
-   The UI is one page served under a path prefix (…/landscape/). Each view gets a
-   real URL: the map at the mount root, apps at …/<app>, and the reserved words
-   metrics|events|traefik at …/<word>. The base is the mount path (dirname of the
-   current pathname), so links stay prefix-agnostic and work in local dev too. */
-const RESERVED = { metrics: 1, events: 1, traefik: 1, storage: 1 };
-function currentBase() { const p = location.pathname; return p.slice(0, p.lastIndexOf("/") + 1); }
+   The UI is one page served under a path prefix (…/landscape/). The server writes
+   that mount into <base href>, so each view gets a real URL beneath it: the map
+   at the root, pages at …/<page> (metrics, events, storage, longhorn, traefik) and
+   app pages at …/app/<name>. Legacy …/<name> app links are rewritten to
+   …/app/<name>. Asset/API URLs are relative, so they resolve against the base. */
+const RESERVED = { metrics: 1, events: 1, traefik: 1, storage: 1, longhorn: 1 };
+function currentBase() {
+  try { const p = new URL(document.baseURI).pathname; return p.endsWith("/") ? p : p + "/"; } catch (_) { return "/"; }
+}
 function pathFor(view, appName) {
   const b = currentBase();
-  if (view === "app") return b + encodeURIComponent(appName);
+  if (view === "app") return b + "app/" + encodeURIComponent(appName);
   if (RESERVED[view]) return b + view;
   return b; // map
 }
 function routeState() { return { view: state.view, appName: state.appName }; }
 function routeFromURL() {
-  const p = location.pathname;
-  const seg = decodeURIComponent(p.slice(p.lastIndexOf("/") + 1));
-  if (seg === "metrics" || seg === "events" || seg === "traefik" || seg === "storage") return { view: seg, appName: null };
-  if (seg === "") return { view: "map", appName: null };
-  return { view: "app", appName: seg };
+  const b = currentBase(), p = location.pathname;
+  const rest = p.startsWith(b) ? p.slice(b.length) : p.replace(/^\/+/, "");
+  let segs;
+  try { segs = rest.split("/").filter(Boolean).map(decodeURIComponent); } catch (_) { segs = []; }
+  if (!segs.length) return { view: "map", appName: null };
+  if (segs[0] === "app") return segs[1] ? { view: "app", appName: segs[1] } : { view: "map", appName: null };
+  if (segs.length === 1 && RESERVED[segs[0]]) return { view: segs[0], appName: null };
+  if (segs.length === 1) return { view: "app", appName: segs[0] }; // legacy …/<app>; canonicalised on load
+  return { view: "map", appName: null };
 }
 // set view state (no history change, no render) — shared by nav + popstate
 function applyRoute(view, appName) {
@@ -131,6 +138,7 @@ function applyRoute(view, appName) {
   state.appError = null;
   state.traefik = null;
   state.storage = null;
+  state.longhorn = null;
   state.appTab = "graph";
   state.appEvents = null;
   state.logs = null;
@@ -162,31 +170,6 @@ function setView(v) { navigate(v, null); }
 function openApp(name) { navigate("app", name); }
 function openTraefik() { navigate("traefik", null); }
 
-/* ---------- top-right Tools menu ----------
-   UIs gated by this console's session through Traefik ForwardAuth (e.g. Longhorn,
-   kubescope), from LANDSCAPE_TOOLS via /api/session. Each opens in its own tab. */
-async function loadTools() {
-  let tools = [];
-  try { const j = await (await api("/session")).json(); tools = j.tools || []; } catch (_) { /* no menu */ }
-  const wrap = $("#toolsmenu"), btn = $("#toolsmenubtn"), pop = $("#toolsmenupop");
-  if (!wrap) return;
-  wrap.classList.toggle("hide", !tools.length);
-  if (!tools.length) return;
-  const ext = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>';
-  pop.innerHTML = '<div class="ph">Tools · signed-in access</div>' + tools.map(t =>
-    '<a role="menuitem" href="' + esc(t.url) + '" target="_blank" rel="noopener">' +
-    '<span class="tn">' + esc(t.name) + ext + '</span>' + (t.desc ? '<span class="td">' + esc(t.desc) + '</span>' : '') + '</a>').join("");
-  btn.onclick = (e) => { e.stopPropagation(); const open = pop.classList.contains("hide"); closeMenu(); if (open) { pop.classList.remove("hide"); btn.setAttribute("aria-expanded", "true"); } };
-  btn.onkeydown = (e) => {
-    if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") {
-      e.preventDefault(); closeMenu(); pop.classList.remove("hide"); btn.setAttribute("aria-expanded", "true");
-      const first = pop.querySelector('[role="menuitem"]'); if (first) first.focus();
-    }
-  };
-  pop.onclick = () => closeMenu();
-  pop.onkeydown = (e) => { if (e.key === "Escape") { closeMenu(); btn.focus(); } };
-}
-
 /* ---------- top-right events/logs menu ---------- */
 function wireMenu() {
   const btn = $("#evmenubtn"), pop = $("#evmenupop");
@@ -210,17 +193,14 @@ function menuAction(a) {
 }
 function toggleMenu() { $("#evmenupop").classList.contains("hide") ? openMenu() : closeMenu(); }
 function openMenu() {
-  closeMenu();
   const pop = $("#evmenupop"), btn = $("#evmenubtn");
   if (pop) pop.classList.remove("hide");
   if (btn) btn.setAttribute("aria-expanded", "true");
 }
 function closeMenu() {
-  for (const [p, b] of [["#evmenupop", "#evmenubtn"], ["#toolsmenupop", "#toolsmenubtn"]]) {
-    const pop = $(p), btn = $(b);
-    if (pop) pop.classList.add("hide");
-    if (btn) btn.setAttribute("aria-expanded", "false");
-  }
+  const pop = $("#evmenupop"), btn = $("#evmenubtn");
+  if (pop) pop.classList.add("hide");
+  if (btn) btn.setAttribute("aria-expanded", "false");
 }
 function syncChrome() {
   const sub = state.view === "app" || state.view === "traefik";
@@ -246,6 +226,10 @@ async function refresh() {
       if (!state.graph) calls.push(["graph", api("/graph")]);
     } else if (state.view === "storage") {
       calls.push(["storage", api("/storage")]);
+      calls.push(["longhorn", api("/longhorn")]); // the Longhorn card + per-PVC volume health
+      if (!state.graph) calls.push(["graph", api("/graph")]);
+    } else if (state.view === "longhorn") {
+      calls.push(["longhorn", api("/longhorn")]);
       if (!state.graph) calls.push(["graph", api("/graph")]);
     } else if (state.view === "events") {
       calls.push(["events", api("/events" + eventsQuery())]);
@@ -270,6 +254,7 @@ async function refresh() {
     }
     if (R.traefik && P.traefik) state.traefik = P.traefik;
     if (R.storage) state.storage = P.storage || { error: true };
+    if (R.longhorn) state.longhorn = P.longhorn || { error: true };
     if (R.ev) state.appEvents = P.ev || { error: true };
     if (R.logs) state.logs = P.logs || { error: true };
     if (R.events) state.events = P.events || { error: true };
@@ -337,6 +322,7 @@ function icon(kind, w = 13, stroke = "currentColor") {
     database: `<ellipse cx="12" cy="5" rx="7" ry="2.5"/><path d="M5 5v14c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V5"/><path d="M5 12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5"/>`,
     clock: `<circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/>`,
     ext: `<path d="M7 17 17 7M8 7h9v9"/>`,
+    disks: `<rect x="3" y="4" width="18" height="7" rx="1.6"/><rect x="3" y="13" width="18" height="7" rx="1.6"/><path d="M7 7.5h.01M7 16.5h.01M11 7.5h6M11 16.5h6"/>`,
     chevron: `<path d="M9 6l6 6-6 6"/>`,
   };
   return `<svg width="${w}" height="${w}" viewBox="0 0 24 24" fill="none" stroke="${stroke}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${paths[kind] || paths.app}</svg>`;
@@ -348,6 +334,7 @@ function render() {
   if (state.view === "events") return renderEvents(v);
   if (state.view === "traefik") return renderTraefik(v);
   if (state.view === "storage") return renderStorage(v);
+  if (state.view === "longhorn") return renderLonghorn(v);
   if (state.view === "app") return renderApp(v);
   if (state.view === "metrics") { if (!state.graph) { v.innerHTML = loading(); return; } return renderMetrics(v); }
   if (!state.graph) { v.innerHTML = loading(); return; }
@@ -360,6 +347,7 @@ const platDesc = {
   "kube-system": "Kubernetes system components — Traefik ingress, CoreDNS, metrics-server and local-path storage.",
   "flux-system": "Flux CD — the source, kustomize, helm, notification and image controllers that reconcile the cluster.",
   "cert-manager": "Issues and renews the Let's Encrypt TLS certificate (cert-manager, webhook, cainjector).",
+  "longhorn-system": "Longhorn — replicated block storage behind every PVC (Postgres, NATS, airlift). Click for the Longhorn page.",
 };
 
 /* ---------- MAP (boxed landscape) ---------- */
@@ -551,6 +539,8 @@ function legendHTML() {
 function wireMap(byId) {
   const map = $(".map");
   { const sl = $("#storagelink"); if (sl) sl.onclick = () => setView("storage"); }
+  // the longhorn-system platform card opens the Longhorn page
+  { const lh = $('.map [data-id="plns/longhorn-system"]'); if (lh) { lh.style.cursor = "pointer"; lh.addEventListener("click", () => setView("longhorn")); } }
   $$(".map [data-id]").forEach(el => {
     const node = byId[el.dataset.id];
     const app = el.dataset.apps || el.dataset.app; // prefer the multi-component set
@@ -1163,29 +1153,157 @@ function renderStorage(v) {
       </div>`).join("") + `</div>`;
   }
 
+  // Longhorn volumes by PV name, to show each Longhorn-backed claim's health
+  const li = state.longhorn && state.longhorn.installed && !state.longhorn.forbidden ? state.longhorn : null;
+  const lhByPV = {};
+  if (li) (li.volumes || []).forEach(x => { lhByPV[x.name] = x; });
+
   let pvcBody;
   if (!pvcs.length) {
     pvcBody = `<div class="stmut mono">no persistent volume claims</div>`;
   } else {
     pvcBody = `<div class="dtwrap"><table class="dtable"><thead><tr>
-        <th>Namespace</th><th>Name</th><th>Storage class</th><th>Capacity</th><th>Access</th><th>Status</th>
+        <th>Namespace</th><th>Name</th><th>Storage class</th><th>Capacity</th><th>Access</th><th>Status</th>${li ? "<th>Longhorn</th>" : ""}
       </tr></thead><tbody>` + pvcs.map(p => {
       const d = p.status === "Bound" ? "s-ok" : (p.status === "Lost" || p.status === "Failed") ? "s-failed" : "s-progressing";
+      const lv = li && p.volume ? lhByPV[p.volume] : null;
+      const lhCell = !li ? "" : lv
+        ? `<td><span class="pvcst"><span class="dot ${robustDot(lv.robustness)}"></span>${esc(lv.robustness || "unknown")} · ${lv.healthyReplicas}/${lv.replicas}</span></td>`
+        : `<td class="mono" style="color:var(--mut)">—</td>`;
       return `<tr>
           <td class="mono">${esc(p.namespace)}</td>
           <td class="mono">${esc(p.name)}</td>
           <td class="mono">${esc(p.storageClass || "—")}</td>
           <td class="mono">${esc(p.capacity || "—")}</td>
           <td class="mono">${esc(p.accessMode || "—")}</td>
-          <td><span class="pvcst"><span class="dot ${d}"></span>${esc(p.status || "—")}</span></td>
+          <td><span class="pvcst"><span class="dot ${d}"></span>${esc(p.status || "—")}</span></td>${lhCell}
         </tr>`;
     }).join("") + `</tbody></table></div>`;
   }
 
   v.innerHTML = band + `<div class="stpage">
+    ${li ? `<div class="stsec">Longhorn</div>${longhornCardHTML(li)}` : ""}
     <div class="stsec">StorageClasses</div>${scBody}
     <div class="stsec">PersistentVolumeClaims</div>${pvcBody}
   </div>`;
+  const go = $("#lhgo");
+  if (go) go.onclick = () => setView("longhorn");
+}
+
+/* the Storage page's Longhorn summary: health at a glance + the two ways in */
+function longhornCardHTML(li) {
+  const s = li.summary || {};
+  const ok = !s.degraded && !s.faulted;
+  return `<div class="card lhcard">
+    <span class="dot ${ok ? "s-ok" : "s-progressing"}"></span>
+    <div class="lhsum">${esc(`${s.healthy}/${s.volumes} volumes healthy · ${fmtBytes(s.storageScheduled)} provisioned of ${fmtBytes(s.storageMax)} · ${s.backupsEnabled ? "backups on" : "backups off"}`)}</div>
+    <span class="grow"></span>
+    <div class="acts">
+      <button id="lhgo" type="button">${icon("disks", 13)} Longhorn details</button>
+      ${li.uiURL ? `<a href="${esc(li.uiURL)}" target="_blank" rel="noopener">Open Longhorn UI ${icon("ext", 12)}</a>` : ""}
+    </div>
+  </div>`;
+}
+
+/* ---------- LONGHORN (the storage engine behind every PVC) ---------- */
+function fmtBytes(b) {
+  if (!b) return "0 B";
+  const u = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let n = b, i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (n >= 100 || i === 0 ? n.toFixed(0) : n.toFixed(1)) + " " + u[i];
+}
+function robustDot(r) { return r === "healthy" ? "s-ok" : r === "degraded" ? "s-progressing" : r === "faulted" ? "s-failed" : "s-unknown"; }
+function lhLink(li, route) { return li.uiURL ? li.uiURL + "#/" + route : ""; }
+function renderLonghorn(v) {
+  const li = state.longhorn;
+  if (!li) { v.innerHTML = `<div class="warn">loading Longhorn…</div>`; return; }
+  if (li.error) { v.innerHTML = errBox("Longhorn unavailable", "The API returned an error."); return; }
+  if (!li.installed) { v.innerHTML = emptyBox("Longhorn isn't installed", "This cluster doesn't serve the longhorn.io API."); return; }
+  if (li.forbidden) { v.innerHTML = errBox("Longhorn hidden", "The console lacks the longhorn.io get/list grant — add it to apps/landscape.yaml in the infra repo."); return; }
+  const s = li.summary || {};
+  const ok = !s.degraded && !s.faulted;
+  const open = li.uiURL ? `<a class="puburl" href="${esc(li.uiURL)}" target="_blank" rel="noopener">Open Longhorn UI ${icon("ext", 13)}</a>` : "";
+  const band = `<div class="appband">
+    <div class="tile">${icon("disks", 22, "#35d0c0")}</div>
+    <div>
+      <div class="titlerow"><h1>Longhorn</h1>${li.version ? `<span class="ver">${esc(li.version)}</span>` : ""}
+        <span class="badge ${ok ? "ok" : "warn"}"><span class="dot ${ok ? "s-ok" : "s-progressing"}"></span>${ok ? "volumes healthy" : "attention"}</span></div>
+      <div class="meta">${esc(`${s.volumes} volumes · ${s.nodes} ${s.nodes === 1 ? "node" : "nodes"}${li.defaultReplicas ? " · default replicas " + li.defaultReplicas : ""} · read-only view`)}</div>
+    </div>
+    <span class="grow"></span>${open}
+  </div>`;
+
+  const provPct = s.storageMax ? Math.round(s.storageScheduled / s.storageMax * 100) : 0;
+  const healthyPct = s.volumes ? Math.round(s.healthy / s.volumes * 100) : 100;
+  const bt = li.backupTarget;
+  const tiles = `<div class="lhgrid"><div class="grid">
+    <div class="mcard gauge">${ring(healthyPct, ok ? "#57d39a" : "#f0b429")}<div><div class="h">Volumes</div><div class="big">${s.healthy}/${s.volumes}</div>
+      <div class="note">healthy · ${s.degraded} degraded · ${s.faulted} faulted · ${s.detached} detached</div></div></div>
+    <div class="mcard gauge">${ring(provPct, "#35d0c0")}<div><div class="h">Provisioned</div><div class="big sm">${esc(fmtBytes(s.storageScheduled))}</div>
+      <div class="note">of ${esc(fmtBytes(s.storageMax))} · written ${esc(fmtBytes(s.actualUsed))} · reserved ${esc(fmtBytes(s.storageReserved))} · free ${esc(fmtBytes(s.storageAvailable))}</div></div></div>
+    <div class="mcard"><div class="h">Nodes</div><div class="big sm">${s.nodesReady}/${s.nodes} ready</div>
+      <div class="note">${s.nodesSchedulable} schedulable · ${s.snapshots} ${s.snapshots === 1 ? "snapshot" : "snapshots"}</div></div>
+    <div class="mcard"><div class="h">Backups</div>
+      ${s.backupsEnabled
+        ? `<div class="big sm" style="color:var(--ok)">enabled</div><div class="note">${esc(bt.url)}${bt.lastSyncedAt ? " · synced " + esc(bt.lastSyncedAt) : ""}</div>`
+        : `<div class="big sm" style="color:var(--warn)">off</div><div class="note attn">${esc((bt && (bt.message || (bt.url ? "target unavailable" : ""))) || "no backup target")} — volumes aren't backed up off the node</div>`}
+      ${li.uiURL ? `<div class="note"><a href="${esc(lhLink(li, "backupTarget"))}" target="_blank" rel="noopener" style="color:var(--teal)">configure in Longhorn ${icon("ext", 11)}</a></div>` : ""}
+    </div>
+  </div></div>`;
+
+  const vols = li.volumes || [];
+  const volBody = !vols.length ? `<div class="stmut mono">no Longhorn volumes</div>` :
+    `<div class="dtwrap"><table class="dtable lhvol"><thead><tr>
+      <th>Volume</th><th>Used by</th><th>Size</th><th>Replicas</th><th>State</th><th>Health</th><th>Snapshots</th><th>Last backup</th><th></th>
+    </tr></thead><tbody>` + vols.map(x => {
+      const who = x.app
+        ? `<a class="app" data-app="${esc(x.app)}">${esc(x.app)}</a>`
+        : x.workload ? `<span class="mono">${esc(x.workload)}</span> <span style="color:var(--mut);font-size:11px">${esc(x.workloadKind || "")}</span>` : `<span style="color:var(--mut)">—</span>`;
+      const repCls = x.healthyReplicas >= x.replicas ? "ok" : x.healthyReplicas > 0 ? "warn" : "err";
+      const ui = lhLink(li, "volume/" + encodeURIComponent(x.name));
+      return `<tr>
+        <td><div class="pvc">${esc(x.pvc ? x.pvcNamespace + "/" + x.pvc : x.name)}</div>${x.pvc ? `<div class="pv">${esc(x.name)}</div>` : ""}</td>
+        <td>${who}</td>
+        <td class="mono">${esc(fmtBytes(x.actualSize))} <span style="color:var(--mut)">/ ${esc(fmtBytes(x.size))}</span></td>
+        <td class="mono"><span class="rep ${repCls}">${x.healthyReplicas}/${x.replicas}</span></td>
+        <td class="mono">${esc(x.state || "—")}${x.node ? `<span style="color:var(--mut)"> · ${esc(x.node)}</span>` : ""}</td>
+        <td><span class="pvcst"><span class="dot ${robustDot(x.robustness)}"></span>${esc(x.robustness || "unknown")}</span></td>
+        <td class="mono">${x.snapshots || 0}</td>
+        <td class="mono">${esc(x.lastBackupAt || "never")}</td>
+        <td>${ui ? `<a class="ui" href="${esc(ui)}" target="_blank" rel="noopener" title="Open in Longhorn">${icon("ext", 13)}</a>` : ""}</td>
+      </tr>`;
+    }).join("") + `</tbody></table></div>`;
+
+  const nodes = li.nodes || [];
+  const nodeBody = !nodes.length ? `<div class="stmut mono">no Longhorn nodes</div>` : `<div class="lhnodes">` + nodes.map(n => `
+    <div class="card lhnode">
+      <div class="row1"><span class="dot ${n.ready ? "s-ok" : "s-failed"}"></span><span class="nm mono">${esc(n.name)}</span>
+        <span class="chip xs ${n.ready ? "ok" : "warn"}">${n.ready ? "ready" : "not ready"}</span>
+        <span class="chip xs ${n.schedulable ? "ok" : "warn"}">${n.schedulable ? "schedulable" : "unschedulable"}</span></div>
+      ${(n.disks || []).map(d => {
+        const pct = (x) => d.max ? Math.max(0, Math.min(100, x / d.max * 100)).toFixed(1) : 0;
+        return `<div class="lhdisk">
+          <div class="dp"><span>${esc(d.path || d.name)}</span><span>${esc(fmtBytes(d.max))}</span></div>
+          <div class="barbg" title="provisioned ${esc(fmtBytes(d.scheduled))} · reserved ${esc(fmtBytes(d.reserved))}"><div class="barfill sched" style="width:${pct(d.scheduled)}%"></div><div class="barfill resv" style="width:${pct(d.reserved)}%"></div></div>
+          <div class="dn"><span>provisioned ${esc(fmtBytes(d.scheduled))}</span><span>reserved ${esc(fmtBytes(d.reserved))}</span><span>free ${esc(fmtBytes(d.available))}</span><span>${d.replicas} ${d.replicas === 1 ? "replica" : "replicas"}</span></div>
+        </div>`;
+      }).join("")}
+    </div>`).join("") + `</div>`;
+
+  const jobs = li.recurringJobs || [];
+  const jobBody = !jobs.length
+    ? `<div class="lhmut">No recurring jobs — no scheduled snapshots or backups.${li.uiURL ? ` <a href="${esc(lhLink(li, "recurringJob"))}" target="_blank" rel="noopener">Create one in Longhorn</a>` : ""}</div>`
+    : `<div class="dtwrap"><table class="dtable"><thead><tr><th>Job</th><th>Task</th><th>Schedule</th><th>Retain</th><th>Groups</th></tr></thead><tbody>` +
+      jobs.map(j => `<tr><td class="mono">${esc(j.name)}</td><td class="mono">${esc(j.task)}</td><td class="mono">${esc(j.cron)}</td><td class="mono">${j.retain}</td><td class="mono">${esc((j.groups || []).join(", ") || "—")}</td></tr>`).join("") +
+      `</tbody></table></div>`;
+
+  v.innerHTML = band + tiles + `<div class="lhpage">
+    <div class="stsec">Volumes</div>${volBody}
+    <div class="stsec">Nodes &amp; disks</div>${nodeBody}
+    <div class="stsec">Recurring jobs</div>${jobBody}
+  </div>`;
+  $$(".lhvol a.app").forEach(a => a.addEventListener("click", () => openApp(a.dataset.app)));
 }
 function drawTraefikEdges() {
   const wrap = $("#tfwrap"), svg = $("#tfedges");

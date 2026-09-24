@@ -77,6 +77,15 @@ GVRs (top of `collect.go`): `helm.toolkit.fluxcd.io/v2 helmreleases`,
 `traefik.io/v1alpha1 ingressroutes`. **Flux 2.9 serves image APIs as `v1`, not
 `v1beta2`.**
 
+- `longhorn.go` `Longhorn(ctx)`: the Longhorn page — `longhorn.io/v1beta2`
+  volumes (anchor read: NotFound ⇒ not installed, Forbidden ⇒ grant missing),
+  engines (healthy replicas = `RW` in `replicaModeMap`), snapshots (count per
+  volume), nodes (`spec.disks` + `status.diskStatus` → capacity rolled into the
+  summary), recurring jobs, the backup target (URL userinfo password redacted),
+  engine image version and the `default-replica-count` setting; volumes are joined
+  to their PVC and, via `claimApps`, to the Deployment mounting it (the app page).
+  `UIPath` is the IngressRoute path to `longhorn-frontend`.
+
 ### `internal/model`
 Plain JSON structs the UI consumes. `model.go`: `Graph`, `Node`, `Edge`,
 `Cluster` (+ `NsSummary`, `GitOpsInfo`), `Metrics`. `app.go`: `AppDetail` and its
@@ -90,7 +99,9 @@ tail of pod stdout — lines + container/pod pickers).
 `Options{Addr, AdminPassword, GithubOwner, PublicURL, Version, CacheTTL}`.
 `Handler()` wires routes; `staticHandler()` serves the embedded `web/` FS and
 falls back to `index.html` for unknown non-API paths so the client-side router
-handles deep-links (`/landscape/<app>`, `/landscape/metrics`…); real assets serve
+handles deep-links (`/landscape/app/<app>`, `/landscape/longhorn`…) — the shell
+gets a `<base href>` for the mount (`shell`, from `PublicURL`'s path) so its
+relative URLs resolve from nested routes; real assets serve
 as files and unknown `/api/*` paths 404. Auth: `authed(r)` validates the
 `ls_session` cookie as `v2.<expiry>.<hex HMAC-SHA256(signKey, "v2.<expiry>")>`
 (`mintToken`/`validToken`), where `signKey` = HMAC(`LANDSCAPE_SESSION_KEY`,
@@ -116,9 +127,16 @@ top bar compacts at 640px, `#view` is `overflow-x:hidden`). `app.js` (vanilla,
 no deps) = auth flow, a History-API router, an adjustable poll (default 15 s), and
 the render functions per view:
 - A **client-side router** gives each view a real URL under the mount prefix:
-  `routeFromURL`/`pathFor`/`currentBase` map the path (dirname = base) to a view,
-  `navigate` pushes history on nav, and `popstate` syncs back/forward. Reserved
-  words `metrics`/`events`/`traefik`; everything else is an app.
+  `currentBase` reads the mount from `<base href>`; `routeFromURL`/`pathFor` map
+  `…/` → map, `…/<page>` (reserved `metrics`/`events`/`traefik`/`storage`/
+  `longhorn`) and `…/app/<name>` → app; a legacy single-segment `…/<name>` is an
+  app and is canonicalised to `…/app/<name>` on load/popstate. `navigate` pushes
+  history on nav, and `popstate` syncs back/forward.
+- `renderLonghorn` — tiles (volume health, provisioned vs capacity, nodes,
+  backups), a volumes table (PVC → app link, size written/provisioned, healthy
+  replicas, state/node, robustness, snapshots, last backup, deep-link to the
+  Longhorn UI volume), node disk bars, recurring jobs; `renderStorage` adds a
+  Longhorn card (`longhornCardHTML`) and a per-PVC Longhorn health column.
 - `renderMap` — the 4 boxed lanes + flow-gap arrows + cluster box; `wireMap`
   binds hover-trace + pin + Traefik-rail click; `applyTrace`/`pinApp`/`unpin`.
 - `renderApp` — header with interactive **Graph / Events / Logs** tabs
@@ -135,8 +153,7 @@ the render functions per view:
   + debounced free-text search + a capped scrollable list (`eventsListHTML` is
   shared with the app-detail Events tab).
 - A top-right menu (next to the profile) jumps to the combined browser / recent
-  warnings, keyboard-accessible (`wireMenu`). A **Tools** menu (`loadTools`) lists
-  the ForwardAuth-gated UIs (new tab). On load/sign-in, `followNext` returns to a
+  warnings, keyboard-accessible (`wireMenu`). On load/sign-in, `followNext` returns to a
   validated `?next=` path (`nextTarget`), with a 10 s same-target guard so a
   gated UI that still refuses can't cause a redirect loop.
 - SVG edges are computed from DOM rects and redrawn on resize; `anchor(a,b)`

@@ -39,10 +39,6 @@ func main() {
 	if os.Getenv("LANDSCAPE_SESSION_KEY") == "" {
 		log.Println("note: LANDSCAPE_SESSION_KEY is unset — sessions are signed from the admin password alone (PBKDF2)")
 	}
-	tools, bad := server.ParseTools(os.Getenv("LANDSCAPE_TOOLS"))
-	for _, b := range bad {
-		log.Println("WARNING:", b)
-	}
 
 	clients, err := kube.New()
 	if err != nil {
@@ -51,12 +47,12 @@ func main() {
 	col := collect.New(clients, owners...)
 	srv := server.New(col, server.Options{
 		Addr: addr, AdminPassword: pw, GithubOwner: owner, PublicURL: pub,
-		Version: Version, CacheTTL: 10 * time.Second, Tools: tools,
+		Version: Version, CacheTTL: 10 * time.Second,
 		SessionKey: os.Getenv("LANDSCAPE_SESSION_KEY"),
 	})
 
 	hs := &http.Server{Addr: addr, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
-	log.Printf("landscape %s listening on %s (github owners %q, %d gated tools)", Version, addr, owners, len(tools))
+	log.Printf("landscape %s listening on %s (github owners %q)", Version, addr, owners)
 	log.Fatal(hs.ListenAndServe())
 }
 

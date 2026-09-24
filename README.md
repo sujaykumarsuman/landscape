@@ -18,7 +18,7 @@ Live at **https://projects.sujaykumar.dev/landscape** (deployed by GitOps —
   the whole flow stays visible; Esc / click-again to unpin). Kustomizations link
   to the exact infra-repo folder each applies. The lanes shrink to fit and stack
   on narrow screens.
-- **App page** — click an app for its full k8s component graph (HelmRelease →
+- **App page** (`/landscape/app/<name>`) — click an app for its full k8s component graph (HelmRelease →
   Deployment → ReplicaSet → Pod, IngressRoute → middlewares → Service, and
   ConfigMap/Secret/PVC mounts) plus a right rail (selected resource, managed-by,
   live usage).
@@ -30,12 +30,17 @@ Live at **https://projects.sujaykumar.dev/landscape** (deployed by GitOps —
 It distinguishes **your services** (your GitHub repos / GHCR) from **infra
 tools** (Flux, cert-manager, Traefik — linked to their docs).
 
-- **Auth gateway for other UIs** — the same admin session gates other in-cluster
-  consoles (Longhorn at `/longhorn/`, kubescope at `/kubescope/`) through Traefik
-  **ForwardAuth**: their IngressRoutes call `GET /api/forward-auth`, which lets a
-  signed-in request through and sends anyone else to the login with
-  `?next=<where they were going>`, then back after sign-in. A top-bar **Tools** menu
-  links to them (`LANDSCAPE_TOOLS`). Landscape itself stays read-only.
+- **Longhorn page** (`/landscape/longhorn`) — the storage engine behind every
+  PVC, read from Longhorn's CRs: volume health/replicas/size joined to their PVC
+  and the app that mounts it, node disk capacity (provisioned/reserved/free),
+  recurring jobs, and the backup target — with deep-links into the Longhorn UI and
+  an **Open Longhorn UI** button. The Storage page carries a Longhorn card and a
+  per-PVC health column.
+- **Auth gateway for the Longhorn UI** — the same admin session gates the Longhorn
+  UI at `/longhorn/` through Traefik **ForwardAuth**: its IngressRoute calls
+  `GET /api/forward-auth`, which lets a signed-in request through and sends anyone
+  else to the login with `?next=<where they were going>`, then back after sign-in.
+  Landscape itself stays read-only.
 
 ## Docs
 
@@ -59,8 +64,7 @@ Flux git source and repo conventions. Nothing is written to the cluster.
 | `LANDSCAPE_SESSION_KEY` | — | optional random secret mixed into the session-signing key (SOPS Secret `landscape-session`), so a leaked cookie can't be brute-forced offline for the password; rotating it signs everyone out |
 | `LANDSCAPE_LISTEN` | `0.0.0.0:8080` | listen address |
 | `LANDSCAPE_GITHUB_OWNER` | `sujaykumarsuman` | owner(s) whose GHCR images are "yours" — a comma list; the first is primary (shared `.github` workflows), e.g. `sujaykumarsuman,skriptvalley` |
-| `LANDSCAPE_PUBLIC_URL` | — | advertised URL; its path is also where ForwardAuth sends signed-out users to log in |
-| `LANDSCAPE_TOOLS` | — | JSON list of gated UIs for the Tools menu: `[{"name":"Longhorn","url":"/longhorn/","desc":"…"}]` (a `/path` or `https://` URL) |
+| `LANDSCAPE_PUBLIC_URL` | — | advertised URL; its path is the console's mount (written into the shell's `<base href>`) and where ForwardAuth sends signed-out users to log in |
 
 ## Develop
 

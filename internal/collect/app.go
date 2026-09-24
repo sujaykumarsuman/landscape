@@ -43,7 +43,7 @@ func (co *Collector) AppDetail(ctx context.Context, name string) (*model.AppDeta
 		img = parseImage(d.Spec.Template.Spec.Containers[0].Image)
 	}
 	det.Image = img.String()
-	det.Owner = img.Registry == "ghcr.io" && img.Owner == co.githubOwner
+	det.Owner = co.ownedImage(img)
 	if det.Owner {
 		si := co.resolveSource(d.Labels, img)
 		det.SourceRepo = si.Owner + "/" + si.Repo
@@ -460,7 +460,7 @@ func (co *Collector) Traefik(ctx context.Context) (*model.TraefikInfo, error) {
 				continue
 			}
 			img := parseImage(d.Spec.Template.Spec.Containers[0].Image)
-			if img.Registry == "ghcr.io" && img.Owner == co.githubOwner {
+			if co.ownedImage(img) {
 				owned[d.Namespace+"/"+d.Name] = true
 			}
 		}

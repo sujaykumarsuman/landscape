@@ -74,27 +74,34 @@ func parseGitURL(u string) (owner, repo string, ok bool) {
 //
 // Unlabeled workloads fall back to the image name, preserving prior behaviour.
 type sourceInfo struct {
-	Group  string // app group (part-of) — the Sources-lane node + card title
-	Owner  string // GitHub owner
-	Repo   string // source repo (defaults to Group)
-	Subdir string // source subdirectory, if any
+	Group    string // app group (part-of) — the Sources-lane node + card title
+	Owner    string // GitHub owner
+	Repo     string // source repo (defaults to Group)
+	Subdir   string // source subdirectory, if any
+	Workflow string // workflow file that builds the image (defaults to deploy.yml)
 }
 
 // Kubernetes labels that drive Sources grouping + source links. part-of is the
 // standard app.kubernetes.io group label; source-repo/subdir are project-scoped
-// (a label value can't hold "owner/repo", so the owner is implied to be githubOwner).
+// (a label value can't hold "owner/repo", so the owner is the image's owner when
+// that is one of yours, else githubOwner). source-workflow names the workflow file
+// when a repo doesn't build with the shared deploy.yml (kubescope: release.yml).
 // The workloads also carry app.kubernetes.io/component, but landscape correlates
 // cards to their group by the workload NAME (data-app), so it isn't read here.
 const (
 	labelPartOf       = "app.kubernetes.io/part-of"
 	labelSourceRepo   = "sujaykumar.dev/source-repo"
 	labelSourceSubdir = "sujaykumar.dev/source-subdir"
+	labelSourceWF     = "sujaykumar.dev/source-workflow"
 )
 
 // resolveSource derives an image's source repo + app group from a workload's
 // labels, falling back to the image name when the grouping labels are absent.
 func (co *Collector) resolveSource(labels map[string]string, img imageRef) sourceInfo {
-	owner := co.githubOwner
+	owner := img.Owner
+	if !co.owns(owner) {
+		owner = co.githubOwner
+	}
 	if owner == "" {
 		owner = img.Owner
 	}
@@ -106,7 +113,7 @@ func (co *Collector) resolveSource(labels map[string]string, img imageRef) sourc
 	if repo == "" {
 		repo = group
 	}
-	return sourceInfo{Group: group, Owner: owner, Repo: repo, Subdir: labels[labelSourceSubdir]}
+	return sourceInfo{Group: group, Owner: owner, Repo: repo, Subdir: labels[labelSourceSubdir], Workflow: labels[labelSourceWF]}
 }
 
 // sourceLink is the "source" deep-link for a resolved source (repo + optional
@@ -133,9 +140,13 @@ func ghLinks(img imageRef, si sourceInfo, infraOwner, infraRepo, infraBranch, ap
 	var out []model.Link
 	if si.Owner != "" && si.Repo != "" {
 		base := "https://github.com/" + si.Owner + "/" + si.Repo
+		wf := si.Workflow
+		if wf == "" {
+			wf = "deploy.yml"
+		}
 		out = append(out,
 			sourceLink(si),
-			model.Link{Type: "workflow", URL: base + "/blob/main/.github/workflows/deploy.yml", Label: "deploy.yml"},
+			model.Link{Type: "workflow", URL: base + "/blob/main/.github/workflows/" + wf, Label: wf},
 			model.Link{Type: "image", URL: base + "/pkgs/container/" + img.Repo, Label: "ghcr · " + img.Repo},
 		)
 	}

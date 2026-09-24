@@ -1,13 +1,14 @@
 # STATUS
 
-_Last updated: 2026-09-21 (v0.8.3)._
+_Last updated: 2026-09-24 (v0.9.0)._
 
 ## Live
 
-- **v0.8.3** at https://projects.sujaykumar.dev/landscape, deployed by GitOps
+- **v0.9.0** at https://projects.sujaykumar.dev/landscape, deployed by GitOps
   (Flux + Helm from `sujaykumarsuman/infra`, `apps/landscape.yaml`).
 - Read-only ClusterRole (see the invariant in `CLAUDE.md`). Admin-password gated
-  (SOPS secret `landscape-admin`).
+  (SOPS secret `landscape-admin`). The same session gates Longhorn (`/longhorn/`)
+  and kubescope (`/kubescope/`) via Traefik ForwardAuth → `/api/forward-auth`.
 
 ## Done
 
@@ -60,6 +61,16 @@ _Last updated: 2026-09-21 (v0.8.3)._
   viewport (each lane scrolls its own overflow).
 - **v0.8.3** — fix: collapse the top-bar nav to icons on small screens (≤640px)
   so it no longer overflows the viewport — no horizontal page scroll on phones.
+- **v0.8.4** — fix: show each PVC's real storageClass.
+- **v0.9.0** — **auth gateway for other UIs**: `GET /api/forward-auth` (Traefik
+  ForwardAuth target — 204 / 302 to login with `?next=` / 401) gates Longhorn and
+  kubescope behind the admin session; login returns to `?next`; a top-bar
+  **Tools** menu (`LANDSCAPE_TOOLS`). Sessions are now **expiring** stateless
+  tokens (12 h server-side; everyone signs in once after the upgrade), signed
+  with PBKDF2(password) + an optional random `LANDSCAPE_SESSION_KEY` (SOPS).
+  `LANDSCAPE_GITHUB_OWNER` takes a comma list so `skriptvalley/*` images render
+  as your apps; the `sujaykumar.dev/source-workflow` label fixes the workflow
+  deep-link for repos not built by `deploy.yml` (kubescope → `release.yml`).
 
 ## Later
 

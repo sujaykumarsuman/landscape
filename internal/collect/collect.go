@@ -19,11 +19,33 @@ import (
 
 type Collector struct {
 	c           *kube.Clients
-	githubOwner string
+	githubOwner string          // primary owner: the shared .github workflows + infra-repo fallback
+	orgs        map[string]bool // extra GitHub owners whose images are also "yours" (e.g. skriptvalley)
 }
 
-func New(c *kube.Clients, githubOwner string) *Collector {
-	return &Collector{c: c, githubOwner: githubOwner}
+// New builds a Collector. owners[0] is the primary GitHub owner; any further
+// owners (orgs) are also treated as yours, so their GHCR images render as apps
+// rather than platform tools.
+func New(c *kube.Clients, owners ...string) *Collector {
+	co := &Collector{c: c, orgs: map[string]bool{}}
+	for i, o := range owners {
+		if i == 0 {
+			co.githubOwner = o
+		} else if o != "" {
+			co.orgs[o] = true
+		}
+	}
+	return co
+}
+
+// owns reports whether a GitHub owner's images are yours (apps, not platform tools).
+func (co *Collector) owns(owner string) bool {
+	return owner != "" && (owner == co.githubOwner || co.orgs[owner])
+}
+
+// ownedImage reports whether an image is one of your GHCR images.
+func (co *Collector) ownedImage(img imageRef) bool {
+	return img.Registry == "ghcr.io" && co.owns(img.Owner)
 }
 
 var (
@@ -163,7 +185,7 @@ func (co *Collector) Graph(ctx context.Context) (*model.Graph, error) {
 			continue
 		}
 		img := parseImage(d.Spec.Template.Spec.Containers[0].Image)
-		owned := img.Registry == "ghcr.io" && img.Owner == co.githubOwner
+		owned := co.ownedImage(img)
 		// only surface app-like workloads: owned apps, or Flux-managed ones
 		hr := hrByName[name]
 		if !owned && hr == nil {

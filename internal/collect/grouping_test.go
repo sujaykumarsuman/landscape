@@ -44,6 +44,38 @@ func TestSourceGroupingByLabels(t *testing.T) {
 	}
 }
 
+// A second GitHub owner (an org such as skriptvalley) counts as yours: its images
+// render as apps, its source links resolve under that owner, and a repo that
+// doesn't build with deploy.yml names its workflow via the source-workflow label.
+func TestExtraOwnerIsYours(t *testing.T) {
+	co := New(nil, "sujaykumarsuman", "skriptvalley")
+	ks := parseImage("ghcr.io/skriptvalley/kubescope:1.1.0")
+	if !co.ownedImage(ks) || !co.ownedImage(parseImage("ghcr.io/sujaykumarsuman/airlift:1.0.1")) {
+		t.Fatalf("both owners' GHCR images must be owned")
+	}
+	if co.ownedImage(parseImage("ghcr.io/fluxcd/helm-controller:v1")) || co.ownedImage(parseImage("docker.io/skriptvalley/kubescope:1")) {
+		t.Fatalf("other owners / registries must not be owned")
+	}
+	si := co.resolveSource(map[string]string{labelPartOf: "kubescope", labelSourceWF: "release.yml"}, ks)
+	if si.Owner != "skriptvalley" || si.Repo != "kubescope" || si.Workflow != "release.yml" {
+		t.Fatalf("kubescope source wrong: %+v", si)
+	}
+	byType := map[string]string{}
+	for _, l := range ghLinks(ks, si, "sujaykumarsuman", "infra", "main", "kubescope") {
+		byType[l.Type] = l.URL
+	}
+	if byType["workflow"] != "https://github.com/skriptvalley/kubescope/blob/main/.github/workflows/release.yml" {
+		t.Errorf("workflow link = %q", byType["workflow"])
+	}
+	if byType["source"] != "https://github.com/skriptvalley/kubescope" {
+		t.Errorf("source link = %q", byType["source"])
+	}
+	// the primary owner is unchanged for its own images
+	if si := co.resolveSource(nil, parseImage("ghcr.io/sujaykumarsuman/airlift:1.0.1")); si.Owner != "sujaykumarsuman" {
+		t.Errorf("primary owner source = %+v", si)
+	}
+}
+
 func TestParsePGHost(t *testing.T) {
 	cases := []struct{ in, svc, ns, cluster string }{
 		{"projects-pgstore-rw.databases.svc.cluster.local", "projects-pgstore-rw", "databases", "projects-pgstore"},

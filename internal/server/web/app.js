@@ -19,8 +19,8 @@ const DEFAULT_POLL = 15000;
 // window listeners bound once at load (startApp may run again after a re-login)
 window.addEventListener("resize", () => { if (state.view === "app") drawAppEdges(); if (state.view === "traefik") drawTraefikEdges(); });
 window.addEventListener("keydown", (e) => { if (e.key === "Escape") { if (state.pin) unpin(); closeMenu(); } });
-// click outside the events menu closes it
-document.addEventListener("click", (e) => { if (!e.target.closest("#evmenu")) closeMenu(); });
+// click outside a top-bar menu closes it
+document.addEventListener("click", (e) => { if (!e.target.closest(".menu")) closeMenu(); });
 // browser back/forward: reflect the URL into the view (no new history entry)
 window.addEventListener("popstate", () => {
   if (!started) return;
@@ -41,19 +41,45 @@ async function init() {
   try {
     const r = await api("/session");
     const j = await r.json();
-    if (j.authed) startApp(); else showLogin();
+    if (j.authed) { if (!followNext()) startApp(); } else showLogin();
   } catch (_) { showLogin(); }
+}
+
+/* ?next=<path> is set by the ForwardAuth redirect (GET /api/forward-auth) when a
+   gated UI such as /kubescope/ or /longhorn/ needed a session: once signed in we
+   go back there. Same-host absolute paths only — never another host. */
+function nextTarget() {
+  const n = new URLSearchParams(location.search).get("next");
+  if (!n || n[0] !== "/" || n[1] === "/" || n[1] === "\\" || /[\u0000-\u001f\u007f]/.test(n)) return "";
+  try { if (new URL(n, location.origin).origin !== location.origin) return ""; } catch (_) { return ""; }
+  return n;
+}
+// follow ?next if present; a same-target bounce within 10s means the gated UI
+// still refused us, so stay on the console rather than loop
+function followNext() {
+  const n = nextTarget();
+  if (!n) return false;
+  try {
+    const last = JSON.parse(sessionStorage.getItem("ls_next") || "null");
+    if (last && last.n === n && Date.now() - last.t < 10000) return false;
+    sessionStorage.setItem("ls_next", JSON.stringify({ n, t: Date.now() }));
+  } catch (_) { /* storage unavailable: follow once anyway */ }
+  location.replace(n);
+  return true;
 }
 
 /* ---------- auth ---------- */
 function showLogin() {
   $("#app").classList.add("hide");
   const lg = $("#login"); lg.classList.remove("hide");
+  const n = nextTarget(), hint = $("#nexthint");
+  hint.classList.toggle("hide", !n);
+  if (n) hint.innerHTML = "Sign in to continue to <code>" + esc(n) + "</code>";
   $("#loginform").onsubmit = async (e) => {
     e.preventDefault();
     $("#loginerr").textContent = "";
     const r = await api("/login", { method: "POST", body: JSON.stringify({ password: $("#pw").value }) });
-    if (r.ok) { lg.classList.add("hide"); startApp(); }
+    if (r.ok) { if (followNext()) return; lg.classList.add("hide"); startApp(); }
     else { $("#loginerr").textContent = "Wrong password"; $("#pw").value = ""; $("#pw").focus(); }
   };
 }
@@ -69,6 +95,7 @@ async function startApp() {
   applyRoute(r.view, r.appName);
   history.replaceState(routeState(), "", pathFor(state.view, state.appName));
   wireMenu();
+  loadTools();
   syncChrome();
   render();
   await refresh();
@@ -135,6 +162,31 @@ function setView(v) { navigate(v, null); }
 function openApp(name) { navigate("app", name); }
 function openTraefik() { navigate("traefik", null); }
 
+/* ---------- top-right Tools menu ----------
+   UIs gated by this console's session through Traefik ForwardAuth (e.g. Longhorn,
+   kubescope), from LANDSCAPE_TOOLS via /api/session. Each opens in its own tab. */
+async function loadTools() {
+  let tools = [];
+  try { const j = await (await api("/session")).json(); tools = j.tools || []; } catch (_) { /* no menu */ }
+  const wrap = $("#toolsmenu"), btn = $("#toolsmenubtn"), pop = $("#toolsmenupop");
+  if (!wrap) return;
+  wrap.classList.toggle("hide", !tools.length);
+  if (!tools.length) return;
+  const ext = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>';
+  pop.innerHTML = '<div class="ph">Tools · signed-in access</div>' + tools.map(t =>
+    '<a role="menuitem" href="' + esc(t.url) + '" target="_blank" rel="noopener">' +
+    '<span class="tn">' + esc(t.name) + ext + '</span>' + (t.desc ? '<span class="td">' + esc(t.desc) + '</span>' : '') + '</a>').join("");
+  btn.onclick = (e) => { e.stopPropagation(); const open = pop.classList.contains("hide"); closeMenu(); if (open) { pop.classList.remove("hide"); btn.setAttribute("aria-expanded", "true"); } };
+  btn.onkeydown = (e) => {
+    if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") {
+      e.preventDefault(); closeMenu(); pop.classList.remove("hide"); btn.setAttribute("aria-expanded", "true");
+      const first = pop.querySelector('[role="menuitem"]'); if (first) first.focus();
+    }
+  };
+  pop.onclick = () => closeMenu();
+  pop.onkeydown = (e) => { if (e.key === "Escape") { closeMenu(); btn.focus(); } };
+}
+
 /* ---------- top-right events/logs menu ---------- */
 function wireMenu() {
   const btn = $("#evmenubtn"), pop = $("#evmenupop");
@@ -158,14 +210,17 @@ function menuAction(a) {
 }
 function toggleMenu() { $("#evmenupop").classList.contains("hide") ? openMenu() : closeMenu(); }
 function openMenu() {
+  closeMenu();
   const pop = $("#evmenupop"), btn = $("#evmenubtn");
   if (pop) pop.classList.remove("hide");
   if (btn) btn.setAttribute("aria-expanded", "true");
 }
 function closeMenu() {
-  const pop = $("#evmenupop"), btn = $("#evmenubtn");
-  if (pop) pop.classList.add("hide");
-  if (btn) btn.setAttribute("aria-expanded", "false");
+  for (const [p, b] of [["#evmenupop", "#evmenubtn"], ["#toolsmenupop", "#toolsmenubtn"]]) {
+    const pop = $(p), btn = $(b);
+    if (pop) pop.classList.add("hide");
+    if (btn) btn.setAttribute("aria-expanded", "false");
+  }
 }
 function syncChrome() {
   const sub = state.view === "app" || state.view === "traefik";

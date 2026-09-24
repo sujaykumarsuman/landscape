@@ -767,6 +767,9 @@ function errBox(title, msg) {
   return `<div class="stub"><div class="box">${icon("clock", 26, "#f0b429")}<h3>${esc(title)}</h3><p>${esc(msg)}</p></div></div>`;
 }
 
+// soft break points after separators, so long env-var style labels
+// (env:KUBESCOPE_AUTH_BASIC_PASSWORD) wrap at word boundaries inside a node
+const wbr = (html) => String(html).replace(/([_:,./-])/g, "$1<wbr>");
 function gnode(gid, kind, kindLabel, name, sub, extra = "") {
   return `<div class="gnode ${extra}" data-gid="${gid}">
     <div class="gk">${icon(kind, 12, kindColor(kind))}${esc(kindLabel)}</div>
@@ -791,9 +794,9 @@ function appGraphHTML(d) {
 
   /* left column: config / secret / pvc + external backing services (e.g. DB) */
   const left = [];
-  (d.configMaps || []).forEach((r, i) => left.push(gnode("cm" + i, "configMap", "ConfigMap", esc(r.name), esc(r.origin || ""))));
-  (d.secrets || []).forEach((r, i) => left.push(gnode("sec" + i, "secret", "Secret" + (r.sops ? " · SOPS" : ""), esc(r.name), esc(r.origin || ""), "warnb")));
-  (d.pvcs || []).forEach((r, i) => left.push(gnode("pvc" + i, "pvc", "PVC", esc(r.name), esc(r.detail || r.origin || ""))));
+  (d.configMaps || []).forEach((r, i) => left.push(gnode("cm" + i, "configMap", "ConfigMap", esc(r.name), wbr(esc(r.origin || "")))));
+  (d.secrets || []).forEach((r, i) => left.push(gnode("sec" + i, "secret", "Secret" + (r.sops ? " · SOPS" : ""), esc(r.name), wbr(esc(r.origin || "")), "warnb")));
+  (d.pvcs || []).forEach((r, i) => left.push(gnode("pvc" + i, "pvc", "PVC", esc(r.name), wbr(esc(r.detail || r.origin || "")))));
   // External backing services (CNPG Postgres, …): a network dependency plus its
   // cross-namespace PVCs — the app's real persistence, not a mounted volume.
   (d.dependencies || []).forEach((dp, j) => {

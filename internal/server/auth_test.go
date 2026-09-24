@@ -13,8 +13,7 @@ import (
 func testServer(t *testing.T) (*Server, *time.Time) {
 	t.Helper()
 	now := time.Unix(1_800_000_000, 0)
-	s := New(nil, Options{AdminPassword: "hunter2", PublicURL: "https://projects.sujaykumar.dev/landscape",
-		Tools: []Tool{{Name: "Kubescope", URL: "/kubescope/"}}})
+	s := New(nil, Options{AdminPassword: "hunter2", PublicURL: "https://projects.sujaykumar.dev/landscape"})
 	s.now = func() time.Time { return now }
 	return s, &now
 }
@@ -203,50 +202,6 @@ func TestSessionKeyChangesSignatures(t *testing.T) {
 	}
 }
 
-func TestSessionListsToolsOnlyWhenAuthed(t *testing.T) {
-	s, _ := testServer(t)
-	h := s.Handler()
-	get := func(c *http.Cookie) map[string]any {
-		req := httptest.NewRequest(http.MethodGet, "/api/session", nil)
-		if c != nil {
-			req.AddCookie(c)
-		}
-		rr := httptest.NewRecorder()
-		h.ServeHTTP(rr, req)
-		var m map[string]any
-		_ = json.Unmarshal(rr.Body.Bytes(), &m)
-		return m
-	}
-	if m := get(nil); m["authed"] != false || m["tools"] != nil {
-		t.Errorf("anon session = %v", m)
-	}
-	m := get(login(t, h, "hunter2"))
-	tools, _ := m["tools"].([]any)
-	if m["authed"] != true || len(tools) != 1 {
-		t.Errorf("authed session = %v", m)
-	}
-}
-
-func TestParseTools(t *testing.T) {
-	tools, bad := ParseTools(`[{"name":"Longhorn","url":"/longhorn/","desc":"Storage"},
-		{"name":"Docs","url":"https://longhorn.io/docs/"},
-		{"name":"Evil","url":"//evil.example/"},
-		{"name":"","url":"/x/"},
-		{"name":"JS","url":"javascript:alert(1)"}]`)
-	if len(tools) != 2 || tools[0].Name != "Longhorn" || tools[1].URL != "https://longhorn.io/docs/" {
-		t.Errorf("tools = %+v", tools)
-	}
-	if len(bad) != 3 {
-		t.Errorf("bad = %v, want 3 skipped", bad)
-	}
-	if tools, bad := ParseTools("not json"); tools != nil || len(bad) != 1 {
-		t.Errorf("invalid json = %v / %v", tools, bad)
-	}
-	if tools, bad := ParseTools(""); tools != nil || bad != nil {
-		t.Errorf("empty = %v / %v", tools, bad)
-	}
-}
-
 // With a valid session, the gate still refuses writes and WebSockets that another
 // origin started (a sibling subdomain is same-site, so SameSite=Lax lets the
 // cookie through); same-origin use and plain navigations pass.
@@ -282,5 +237,44 @@ func TestForwardAuthRefusesCrossOriginWrites(t *testing.T) {
 		if rr := forwardAuth(h, c, tc.hdr); rr.Code != tc.want {
 			t.Errorf("%s = %d, want %d", name, rr.Code, tc.want)
 		}
+	}
+}
+
+// The shell's <base href> is the prefix Traefik stripped (X-Forwarded-Prefix)
+// when it is a plain path, else "/" — so relative assets resolve from nested
+// client routes behind the proxy, and a port-forward (no prefix) still loads.
+func TestShellBaseHref(t *testing.T) {
+	s, _ := testServer(t)
+	get := func(path, prefix string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		if prefix != "" {
+			req.Header.Set("X-Forwarded-Prefix", prefix)
+		}
+		rr := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rr, req)
+		return rr
+	}
+	for _, p := range []string{"/", "/app/airlift", "/metrics", "/longhorn", "/index.html"} {
+		rr := get(p, "/landscape")
+		if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `<base href="/landscape/">`) {
+			t.Errorf("%s via Traefik: %d, base tag missing", p, rr.Code)
+		}
+		if rr.Header().Get("Cache-Control") != "no-cache" {
+			t.Errorf("%s: shell must not be cached", p)
+		}
+		if rr := get(p, ""); !strings.Contains(rr.Body.String(), `<base href="/">`) {
+			t.Errorf("%s without a prefix (port-forward/local): base should be /", p)
+		}
+	}
+	for _, bad := range []string{`/x"><script>alert(1)</script>`, "//evil.example", "/a b", "landscape", "/x@evil", "/a,/b"} {
+		if rr := get("/", bad); !strings.Contains(rr.Body.String(), `<base href="/">`) || strings.Contains(rr.Body.String(), "<script>alert") {
+			t.Errorf("unsafe prefix %q must fall back to /", bad)
+		}
+	}
+	if rr := get("/app.js", "/landscape"); !strings.HasPrefix(rr.Body.String(), `"use strict"`) || strings.Contains(rr.Header().Get("Content-Type"), "html") {
+		t.Errorf("real assets are served as-is (got %s)", rr.Header().Get("Content-Type"))
+	}
+	if rr := get("/api/nope", ""); rr.Code != http.StatusNotFound {
+		t.Errorf("unknown api path = %d, want 404", rr.Code)
 	}
 }

@@ -35,7 +35,7 @@ button{font-family:var(--sans)}
 #top{display:flex;align-items:center;height:56px;padding:0 20px;border-bottom:1px solid var(--line);background:#0c0f14;gap:0}
 .brand{display:flex;align-items:center;gap:9px;font-weight:600}
 /* Desktop: text nav. Small screens: icon-only (see the max-width:640 block) so
-   the four items fit. min-width:0 + overflow-x is a silent guard so the bar can
+   the five items fit. min-width:0 + overflow-x is a silent guard so the bar can
    never push the page wider than the viewport (brand + rightbar keep their size). */
 .nav{display:flex;gap:4px;margin-left:26px;min-width:0;overflow-x:auto;scrollbar-width:none}
 .nav::-webkit-scrollbar{display:none}
@@ -343,21 +343,6 @@ button{font-family:var(--sans)}
 .menupop{position:absolute;right:0;top:36px;z-index:60;min-width:184px;padding:6px;background:#0f1420;border:1px solid var(--line2);border-radius:10px;box-shadow:0 18px 46px rgba(0,0,0,.55);display:flex;flex-direction:column;gap:2px}
 .menupop button{text-align:left;height:32px;padding:0 10px;border:none;background:none;border-radius:7px;color:var(--dim);font-family:var(--sans);font-size:13px;cursor:pointer}
 .menupop button:hover,.menupop button:focus{background:#161d29;color:var(--text);outline:none}
-/* Tools menu: UIs gated by this console's session (Traefik ForwardAuth) */
-.toolspop{min-width:250px}
-.toolspop .ph{padding:6px 10px 4px;color:var(--mut);font-size:11px;letter-spacing:.04em;text-transform:uppercase}
-.toolspop a{display:flex;flex-direction:column;gap:2px;padding:7px 10px;border-radius:7px;color:var(--dim);text-decoration:none}
-.toolspop a:hover,.toolspop a:focus{background:#161d29;color:var(--text);outline:none}
-.toolspop .tn{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text)}
-.toolspop .tn svg{color:var(--mut)}
-.toolspop .td{font-size:11.5px;color:var(--mut)}
-/* phones: the wrench sits mid-bar, so a right-anchored popover would spill off the
-   left edge — span the viewport under the top bar instead (scrolls with the page) */
-@media(max-width:640px){
-  #toolsmenu{position:static}
-  .toolspop{left:12px;right:12px;top:52px;min-width:0}
-}
-
 /* empty state (events) */
 .empty{display:grid;place-items:center;height:calc(100vh - 56px - 44px);text-align:center;color:var(--mut)}
 .empty .box{max-width:420px;padding:30px}
@@ -400,7 +385,7 @@ button{font-family:var(--sans)}
   #top{padding:0 12px}
   .brand{gap:0;font-size:0}
   .nav{margin-left:8px}
-  /* icon-only nav: hide the labels, show the glyphs so all four fit */
+  /* icon-only nav: hide the labels, show the glyphs so all five fit */
   .nav button{padding:0 9px}
   .nav button .nl{display:none}
   .nav button .ni{display:block}
@@ -412,6 +397,15 @@ button{font-family:var(--sans)}
   #health{display:none}
   .grid{grid-template-columns:1fr}
   .mcard.wide{grid-column:span 1}
+}
+/* the narrowest phones: tighten the icon nav and the right bar so the fifth
+   nav item never scrolls out of reach */
+@media(max-width:380px){
+  #top{padding:0 8px}
+  .nav{margin-left:4px;gap:0}
+  .nav button{padding:0 7px}
+  .rightbar{gap:4px}
+  .profile{padding-left:4px}
 }
 
 /* ---------- storage view ---------- */
@@ -431,3 +425,37 @@ button{font-family:var(--sans)}
 .dtable tr:last-child td{border-bottom:none}
 .dtable tbody tr:hover{background:var(--panel2)}
 .pvcst{display:inline-flex;align-items:center;gap:6px;font-size:11.5px}
+
+/* ---------- longhorn view ---------- */
+.appband a.puburl{text-decoration:none}
+.appband a.puburl:hover{border-color:var(--teal)}
+.lhgrid{padding:18px 20px 0}
+.lhgrid .grid{padding:0}
+.lhpage{padding:18px 20px;display:flex;flex-direction:column;gap:12px}
+.mcard .big.sm{font-size:19px}
+.mcard .note{font-family:var(--mono);font-size:11px;color:var(--mut);margin-top:4px;overflow-wrap:anywhere}
+.mcard .note.attn{color:var(--warn)}
+.lhvol .pvc{font-family:var(--mono);font-size:12.5px}
+.lhvol .pv{font-family:var(--mono);font-size:10.5px;color:var(--mut);margin-top:2px}
+.lhvol a.app{color:var(--teal);text-decoration:none;cursor:pointer}
+.lhvol a.app:hover{text-decoration:underline}
+.lhvol .rep.ok{color:var(--ok)}.lhvol .rep.warn{color:var(--warn)}.lhvol .rep.err{color:var(--err)}
+.lhvol a.ui{color:var(--mut);display:inline-grid;place-items:center}
+.lhvol a.ui:hover{color:var(--teal)}
+.lhnodes{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr))}
+.lhdisk .barfill.hot{background:var(--warn)}
+.lhwarn{font-family:var(--mono);font-size:11px;color:var(--warn);overflow-wrap:anywhere}
+.lhnode .row1{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.lhdisk{margin-top:12px}
+.lhdisk .dp{display:flex;justify-content:space-between;gap:8px;font-family:var(--mono);font-size:11.5px;color:var(--dim);margin-bottom:6px}
+.lhdisk .dn{display:flex;flex-wrap:wrap;gap:4px 12px;font-family:var(--mono);font-size:10.5px;color:var(--mut);margin-top:6px}
+.lhdisk .barbg{display:flex}
+.lhdisk .barfill.sched{background:var(--teal)}
+.lhdisk .barfill.resv{background:#5b6472}
+.lhcard{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:12px 14px}
+.lhcard .lhsum{font-family:var(--mono);font-size:12px;color:var(--dim)}
+.lhcard .acts{display:flex;gap:8px;flex-wrap:wrap}
+.lhcard .acts a,.lhcard .acts button{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 11px;border:1px solid var(--line2);border-radius:8px;color:var(--teal);font-size:12.5px;background:none;cursor:pointer;text-decoration:none}
+.lhcard .acts a:hover,.lhcard .acts button:hover{border-color:var(--teal)}
+.lhmut{color:var(--mut);font-size:12px}
+.lhmut a{color:var(--teal)}

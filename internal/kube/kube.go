@@ -18,7 +18,7 @@ import (
 
 // Clients bundles everything the collector needs.
 type Clients struct {
-	Typed   *kubernetes.Clientset
+	Typed   kubernetes.Interface
 	Dynamic dynamic.Interface
 	Metrics *metricsv.Clientset
 }

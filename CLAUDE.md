@@ -22,8 +22,10 @@ objects' data. The SOPS badge is inferred from the owning Kustomization's
 `spec.decryption.provider == sops`. The ClusterRole grants only read verbs:
 `get,list` on core `nodes,namespaces,pods,services,persistentvolumeclaims,events`,
 apps `deployments,replicasets`, `metrics.k8s.io`, `storage.k8s.io storageclasses`,
-the Flux CRD groups, and `traefik.io ingressroutes`; plus `get` on core
-`pods/log`. **No `secrets`, no `configmaps`, no write verbs.**
+the Flux CRD groups, `traefik.io ingressroutes`, and the `longhorn.io` CRs the
+Longhorn page reads (`volumes,engines,nodes,recurringjobs,backuptargets,
+engineimages,snapshots,settings` — status/spec only, never volume data); plus
+`get` on core `pods/log`. **No `secrets`, no `configmaps`, no write verbs.**
 Any new collector read must fit this set — if a feature needs a new
 resource/verb, add it to `apps/landscape.yaml` in the infra repo (chart
 `project`'s `rbac.clusterRole.rules`) and call it out in the PR.
@@ -38,8 +40,10 @@ resource/verb, add it to `apps/landscape.yaml` in the infra repo (chart
   landscape graph (nodes/edges + cluster roll-ups); `app.go` has
   `AppDetail(ctx,name)` (per-app component graph), `Traefik(ctx)` (ingress
   routing), and `clusterRollup` (namespaces, GitOps controllers/kustomizations,
-  node capacity); `metrics.go` `Metrics(ctx)`; `links.go` (image/git parsing,
-  `ghLinks`, infra-tool docs). GVRs for the Flux/Traefik CRDs live at the top of
+  node capacity); `metrics.go` `Metrics(ctx)`; `storage.go` `Storage(ctx)`;
+  `longhorn.go` `Longhorn(ctx)` (longhorn.io CRs joined to PVCs + the Deployments
+  mounting them; NotFound = not installed, Forbidden = grant missing);
+  `links.go` (image/git parsing, `ghLinks`, infra-tool docs). GVRs for the Flux/Traefik CRDs live at the top of
   `collect.go`.
 - `internal/model` — the JSON types the UI renders (`model.go`: Graph/Node/Edge/
   Cluster/Metrics; `app.go`: AppDetail + component detail types, NsSummary,
@@ -54,37 +58,42 @@ resource/verb, add it to `apps/landscape.yaml` in the infra repo (chart
 ## HTTP surface
 
 Public: `GET /healthz`, `GET /api/info`, `GET /api/forward-auth`. Auth (POST)
-`/api/login`, `/api/logout`, `/api/session` (lists the Tools once signed in).
+`/api/login`, `/api/logout`, `/api/session`.
 Behind the `ls_session` cookie: `GET /api/graph`, `GET /api/metrics`,
-`GET /api/app/{name}`, `GET /api/traefik`, … Everything else is the embedded UI
-at `/`. Session = a stateless, expiring token `v2.<expiry>.<HMAC-SHA256>` whose
+`GET /api/app/{name}`, `GET /api/traefik`, `GET /api/storage`, `GET /api/longhorn`,
+… Everything else is the embedded UI at `/`: the shell gets a `<base href>` for
+the mount — the prefix Traefik stripped (`X-Forwarded-Prefix`, validated as a
+plain path), else `/` (port-forward, local) — so its relative asset/API URLs
+resolve from nested client routes. Session = a stateless, expiring token `v2.<expiry>.<HMAC-SHA256>` whose
 key is PBKDF2(admin password) mixed with the optional random
 `LANDSCAPE_SESSION_KEY` (derived once at startup) — survives restarts/redeploys,
 **expires server-side after 12 h** (also the cookie lifetime), canonical expiry
 only, and all sessions die when the password or session key rotates. The cookie is `Path=/` so it also reaches the gated UIs on the host.
 
 **Auth gateway.** `/api/forward-auth` is the Traefik ForwardAuth target that gates
-other UIs (Longhorn `/longhorn/`, kubescope `/kubescope/` — IngressRoutes in the
-infra repo): 204 when the session is valid; otherwise a page navigation gets a
+other UIs (the Longhorn UI at `/longhorn/` — an IngressRoute in the infra repo): 204 when the session is valid; otherwise a page navigation gets a
 302 to the login with `?next=<X-Forwarded-Uri>` (same-host paths only — checked
 server-side and again in the UI before following) and API/WebSocket/non-GET calls
-get a 401. A signed-in request that another origin started with a
+get a 401 (only the Longhorn UI uses it now; kubescope has its own sign-in). A signed-in request that another origin started with a
 state-changing method or as a WebSocket gets a 403 (`crossOriginWrite`:
 Sec-Fetch-Site, else Origin vs `X-Forwarded-Host`), because `SameSite=Lax` still
 admits sibling subdomains. The redirect is an **absolute** URL (`LANDSCAPE_PUBLIC_URL`, else
 Traefik's `X-Forwarded-Proto/Host`): Traefik resolves a relative `Location`
 against the auth address, i.e. the in-cluster service. Successful checks are not
-logged (they run on every gated request). The gated UIs' own powers (kubescope runs cluster-admin) are theirs,
+logged (they run on every gated request). The gated UI's own powers (the Longhorn UI can act on volumes) are its own,
 not landscape's — landscape's ServiceAccount stays read-only. The admin
-password is a SOPS secret (`apps/secrets/landscape-admin.enc.yaml` in infra),
+password is the shared SOPS secret `projects-admin` (key `ADMIN_PASSWORD`,
+`apps/secrets/projects-admin.enc.yaml` in infra, one copy per consuming
+namespace — kubescope signs in with it too), mapped to `LANDSCAPE_ADMIN_PASSWORD`;
 rotated with `sops` — there is deliberately **no in-app password change** (it
 would fight the GitOps/SOPS source of truth).
 
 ## UI model (web/app.js)
 
-Views: `map` (the 4-lane pipeline), `metrics`, `events` (placeholder for now),
-`app` (full-page per-app component graph + right rail), `traefik` (ingress
-routing page). `state` holds `graph`/`metrics`/`app`/`traefik`/`view`/`appName`/
+Views and URLs (under the mount): `map` (the 4-lane pipeline) at the root;
+pages `metrics`, `events`, `storage`, `longhorn`, `traefik` at `…/<page>`; `app`
+(full-page per-app component graph + right rail) at `…/app/<name>` — legacy
+`…/<name>` links are rewritten. The router reads the mount from `<base href>`. `state` holds `graph`/`metrics`/`app`/`traefik`/`view`/`appName`/
 `pin`; a 15 s poll re-renders the active view. Edges on the app + traefik pages
 are drawn as SVG from DOM rects (`drawAppEdges`/`drawTraefikEdges` + `anchor()`),
 redrawn on resize. Map interactions: hover traces a component's `data-app` chain
@@ -136,8 +145,7 @@ KUBECONFIG=/tmp/kc LANDSCAPE_ADMIN_PASSWORD=dev \
 
 The dev password is whatever you pass; the live one is the SOPS secret. To read
 the live admin password: `ssh airlift-vps "k3s kubectl get secret
-landscape-admin -n landscape -o jsonpath='{.data.LANDSCAPE_ADMIN_PASSWORD}' |
-base64 -d"`.
+projects-admin -n landscape -o jsonpath='{.data.ADMIN_PASSWORD}' | base64 -d"`.
 
 ## Output style
 

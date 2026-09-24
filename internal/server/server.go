@@ -1,6 +1,6 @@
 // Package server exposes the read-only landscape API and the embedded UI, behind
-// an admin-password gate. The same session also gates other in-cluster UIs
-// (Longhorn, kubescope) through Traefik ForwardAuth (GET /api/forward-auth).
+// an admin-password gate. The same session also gates the Longhorn UI through
+// Traefik ForwardAuth (GET /api/forward-auth).
 package server
 
 import (
@@ -12,7 +12,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
+	"html"
 	"io/fs"
 	"log"
 	"net/http"
@@ -38,20 +38,10 @@ type Options struct {
 	PublicURL     string
 	Version       string
 	CacheTTL      time.Duration
-	// Tools are the UIs gated by this console's session via Traefik ForwardAuth
-	// (e.g. Longhorn, kubescope), listed in the top-bar Tools menu once signed in.
-	Tools []Tool
 	// SessionKey is an optional random secret (LANDSCAPE_SESSION_KEY) mixed into
 	// the session-signing key, so a leaked token can't be brute-forced offline
 	// for the admin password. Rotating it (or the password) ends every session.
 	SessionKey string
-}
-
-// Tool is a gated UI linked from the console (LANDSCAPE_TOOLS).
-type Tool struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
-	Desc string `json:"desc,omitempty"`
 }
 
 // sessionTTL bounds a session server-side (and the cookie's browser lifetime).
@@ -164,6 +154,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/events", s.requireAuth(s.eventsH))
 	mux.HandleFunc("/api/traefik", s.requireAuth(s.traefikH))
 	mux.HandleFunc("/api/storage", s.requireAuth(s.storageH))
+	mux.HandleFunc("/api/longhorn", s.requireAuth(s.longhornH))
 
 	mux.Handle("/", s.staticHandler())
 	return logMW(mux)
@@ -171,30 +162,72 @@ func (s *Server) Handler() http.Handler {
 
 // staticHandler serves the embedded UI and, for unknown non-API paths, falls
 // back to index.html so the client-side router can handle deep-links like
-// /landscape/<app> or /landscape/metrics (a single-page app served under a path
-// prefix). Real assets (app.js, style.css) are served as files; unknown /api/*
+// /landscape/app/<app> or /landscape/metrics (a single-page app served under a
+// path prefix). Real assets (app.js, style.css) are served as files; unknown /api/*
 // paths 404 rather than returning the shell.
 func (s *Server) staticHandler() http.Handler {
 	sub, _ := fs.Sub(webFS, "web")
 	fileSrv := http.FileServer(http.FS(sub))
+	index, err := fs.ReadFile(sub, "index.html")
+	if err != nil {
+		index = []byte("landscape UI missing from this build")
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		clean := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
 		if clean == "api" || strings.HasPrefix(clean, "api/") {
 			http.NotFound(w, r)
 			return
 		}
-		if clean != "" {
+		if clean != "" && clean != "index.html" {
 			if f, err := sub.Open(clean); err == nil {
 				_ = f.Close()
 				fileSrv.ServeHTTP(w, r) // a real embedded asset
 				return
 			}
-			// a client-side route (e.g. /airlift, /metrics): serve the shell
-			r = r.Clone(r.Context())
-			r.URL.Path = "/"
 		}
-		fileSrv.ServeHTTP(w, r)
+		// the root or a client-side route (/app/airlift, /metrics, /longhorn): the shell
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		if r.Method != http.MethodHead {
+			_, _ = w.Write(withBase(index, mountBase(r)))
+		}
 	})
+}
+
+// mountBase is where the console is mounted for this request: the prefix
+// Traefik's stripPrefix middleware removed (it sets X-Forwarded-Prefix) when it
+// is a plain path, else "/" — so a port-forward or a local run, which reach the
+// console at the root, still load. The UI's asset/API URLs are relative, so
+// the <base href> keeps them under the mount from nested routes like
+// /landscape/app/airlift; the client-side router reads it back.
+func mountBase(r *http.Request) string {
+	p := r.Header.Get("X-Forwarded-Prefix")
+	if !safeMount(p) {
+		return "/"
+	}
+	return strings.TrimSuffix(p, "/") + "/"
+}
+
+// safeMount accepts "/segment[/segment…]" of URL-safe characters only — the
+// value is written into HTML, and must never name another host ("//x").
+func safeMount(p string) bool {
+	if len(p) < 2 || len(p) > 256 || p[0] != '/' || p[1] == '/' {
+		return false
+	}
+	for _, c := range p {
+		ok := c == '/' || c == '-' || c == '_' || c == '.' || c == '~' ||
+			(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// withBase writes <base href="…"> as the first element of <head>.
+func withBase(index []byte, base string) []byte {
+	tag := `<base href="` + html.EscapeString(base) + `">`
+	return []byte(strings.Replace(string(index), "<head>", "<head>\n"+tag, 1))
 }
 
 func (s *Server) adminEnabled() bool { return s.opt.AdminPassword != "" }
@@ -227,19 +260,11 @@ func (s *Server) infoH(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) sessionH(w http.ResponseWriter, r *http.Request) {
-	if !s.authed(r) {
-		writeJSON(w, http.StatusOK, map[string]any{"authed": false})
-		return
-	}
-	tools := s.opt.Tools
-	if tools == nil {
-		tools = []Tool{}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"authed": true, "tools": tools})
+	writeJSON(w, http.StatusOK, map[string]any{"authed": s.authed(r)})
 }
 
 // forwardAuthH is the Traefik ForwardAuth target that gates other in-cluster UIs
-// (Longhorn, kubescope) behind this console's session. Traefik sends the original
+// (today the Longhorn UI) behind this console's session. Traefik sends the original
 // request's headers (so the ls_session cookie, Path=/, comes along) plus
 // X-Forwarded-Method/-Uri; a 2xx lets the request through to the gated UI, and
 // anything else is returned to the browser as-is. So: a page navigation without a
@@ -268,7 +293,7 @@ func (s *Server) forwardAuthH(w http.ResponseWriter, r *http.Request) {
 // crossOriginWrite reports a gated request that another origin initiated with a
 // state-changing method, or as a WebSocket. The session cookie is SameSite=Lax,
 // which still lets sibling subdomains (same-site) ride it — e.g. a form POST that
-// restarts a workload in kubescope or acts on a Longhorn volume — so the gate
+// acts on a Longhorn volume — so the gate
 // checks the origin itself: Sec-Fetch-Site, else Origin vs the forwarded host
 // (the rule of Go's http.CrossOriginProtection). Top-level GET navigations from
 // elsewhere stay allowed; non-browser clients (no headers) are unaffected.
@@ -354,33 +379,6 @@ func safeNext(p string) bool {
 		}
 	}
 	return true
-}
-
-// ParseTools reads LANDSCAPE_TOOLS: a JSON list of {name, url, desc}. A URL must
-// be a local absolute path (/longhorn/) or an https:// URL; bad entries are
-// skipped and reported, never fatal.
-func ParseTools(raw string) ([]Tool, []string) {
-	if strings.TrimSpace(raw) == "" {
-		return nil, nil
-	}
-	var in []Tool
-	if err := json.Unmarshal([]byte(raw), &in); err != nil {
-		return nil, []string{"LANDSCAPE_TOOLS: " + err.Error()}
-	}
-	var out []Tool
-	var bad []string
-	for _, t := range in {
-		t.Name, t.URL = strings.TrimSpace(t.Name), strings.TrimSpace(t.URL)
-		u, err := url.Parse(t.URL)
-		local := safeNext(t.URL)
-		remote := err == nil && u.Scheme == "https" && u.Host != ""
-		if t.Name == "" || (!local && !remote) {
-			bad = append(bad, fmt.Sprintf("LANDSCAPE_TOOLS: skipping %q (%q): need a name and a /path or https:// URL", t.Name, t.URL))
-			continue
-		}
-		out = append(out, t)
-	}
-	return out, bad
 }
 
 func (s *Server) loginH(w http.ResponseWriter, r *http.Request) {
@@ -519,6 +517,24 @@ func (s *Server) getStorage(ctx context.Context) (*model.StorageInfo, error) {
 	s.storage, s.storageAt = st, time.Now()
 	s.mu.Unlock()
 	return st, nil
+}
+
+// longhornH serves the Longhorn view (volumes ↔ PVCs ↔ apps, node disks,
+// recurring jobs, backup target) plus the public URL of the Longhorn UI route.
+func (s *Server) longhornH(w http.ResponseWriter, r *http.Request) {
+	s.cachedJSON(w, r, "longhorn", func(ctx context.Context) (any, error) {
+		li, err := s.col.Longhorn(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if li.UIPath != "" {
+			li.UIURL = strings.TrimSuffix(li.UIPath, "/") + "/"
+			if u, err := url.Parse(s.opt.PublicURL); err == nil && u.Host != "" {
+				li.UIURL = u.Scheme + "://" + u.Host + li.UIURL
+			}
+		}
+		return li, nil
+	})
 }
 
 // eventsH serves the combined events browser with ns/type/kind/text filters.

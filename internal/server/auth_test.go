@@ -240,32 +240,41 @@ func TestForwardAuthRefusesCrossOriginWrites(t *testing.T) {
 	}
 }
 
-// The shell carries a <base href> for the mount (LANDSCAPE_PUBLIC_URL's path) so
-// relative assets resolve from nested client routes (/landscape/app/airlift).
+// The shell's <base href> is the prefix Traefik stripped (X-Forwarded-Prefix)
+// when it is a plain path, else "/" — so relative assets resolve from nested
+// client routes behind the proxy, and a port-forward (no prefix) still loads.
 func TestShellBaseHref(t *testing.T) {
-	get := func(s *Server, path string) *httptest.ResponseRecorder {
+	s, _ := testServer(t)
+	get := func(path, prefix string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		if prefix != "" {
+			req.Header.Set("X-Forwarded-Prefix", prefix)
+		}
 		rr := httptest.NewRecorder()
-		s.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
+		s.Handler().ServeHTTP(rr, req)
 		return rr
 	}
-	s, _ := testServer(t)
 	for _, p := range []string{"/", "/app/airlift", "/metrics", "/longhorn", "/index.html"} {
-		rr := get(s, p)
+		rr := get(p, "/landscape")
 		if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `<base href="/landscape/">`) {
-			t.Errorf("%s: %d, base tag missing", p, rr.Code)
+			t.Errorf("%s via Traefik: %d, base tag missing", p, rr.Code)
 		}
 		if rr.Header().Get("Cache-Control") != "no-cache" {
 			t.Errorf("%s: shell must not be cached", p)
 		}
+		if rr := get(p, ""); !strings.Contains(rr.Body.String(), `<base href="/">`) {
+			t.Errorf("%s without a prefix (port-forward/local): base should be /", p)
+		}
 	}
-	if rr := get(s, "/app.js"); !strings.HasPrefix(rr.Body.String(), `"use strict"`) || strings.Contains(rr.Header().Get("Content-Type"), "html") {
-		t.Errorf("real assets are served as-is (got %q, %s)", rr.Body.String()[:min(20, rr.Body.Len())], rr.Header().Get("Content-Type"))
+	for _, bad := range []string{`/x"><script>alert(1)</script>`, "//evil.example", "/a b", "landscape", "/x@evil", "/a,/b"} {
+		if rr := get("/", bad); !strings.Contains(rr.Body.String(), `<base href="/">`) || strings.Contains(rr.Body.String(), "<script>alert") {
+			t.Errorf("unsafe prefix %q must fall back to /", bad)
+		}
 	}
-	if rr := get(s, "/api/nope"); rr.Code != http.StatusNotFound {
+	if rr := get("/app.js", "/landscape"); !strings.HasPrefix(rr.Body.String(), `"use strict"`) || strings.Contains(rr.Header().Get("Content-Type"), "html") {
+		t.Errorf("real assets are served as-is (got %s)", rr.Header().Get("Content-Type"))
+	}
+	if rr := get("/api/nope", ""); rr.Code != http.StatusNotFound {
 		t.Errorf("unknown api path = %d, want 404", rr.Code)
-	}
-	local := New(nil, Options{AdminPassword: "x"}) // local dev: no public URL → mounted at /
-	if rr := get(local, "/app/airlift"); !strings.Contains(rr.Body.String(), `<base href="/">`) {
-		t.Error("local base should be /")
 	}
 }

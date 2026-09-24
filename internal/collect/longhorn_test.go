@@ -67,14 +67,18 @@ func TestLonghornJoinsVolumesToAppsAndSummarises(t *testing.T) {
 					"workloadsStatus": []any{map[string]any{"workloadName": "nats", "workloadType": "StatefulSet"}}}}),
 		lhObj("Volume", "pvc-c", map[string]any{"size": "10", "numberOfReplicas": int64(1)},
 			map[string]any{"state": "detached", "robustness": "unknown"}),
-		lhObj("Engine", "pvc-a-e", map[string]any{"volumeName": "pvc-a"}, map[string]any{"replicaModeMap": map[string]any{"pvc-a-r1": "RW"}}),
-		lhObj("Engine", "pvc-b-e", map[string]any{"volumeName": "pvc-b"}, map[string]any{"replicaModeMap": map[string]any{"pvc-b-r1": "RW", "pvc-b-r2": "WO"}}),
+		lhObj("Engine", "pvc-a-e", map[string]any{"volumeName": "pvc-a"}, map[string]any{"currentState": "running", "replicaModeMap": map[string]any{"pvc-a-r1": "RW"}}),
+		// mid-migration: two running engines for one volume — take the best, never the sum
+		lhObj("Engine", "pvc-a-e2", map[string]any{"volumeName": "pvc-a"}, map[string]any{"currentState": "running", "replicaModeMap": map[string]any{"pvc-a-r1": "RW"}}),
+		lhObj("Engine", "pvc-b-e", map[string]any{"volumeName": "pvc-b"}, map[string]any{"currentState": "running", "replicaModeMap": map[string]any{"pvc-b-r1": "RW", "pvc-b-r2": "WO"}}),
+		// pvc-c is detached: its engine is stopped, so its replicas are unknown (not 0/N)
+		lhObj("Engine", "pvc-c-e", map[string]any{"volumeName": "pvc-c"}, map[string]any{"currentState": "stopped", "replicaModeMap": map[string]any{}}),
 		lhObj("Snapshot", "snap-1", map[string]any{"volume": "pvc-a"}, map[string]any{}),
 		lhObj("Node", "n1", map[string]any{"disks": map[string]any{"d1": map[string]any{"path": "/var/lib/longhorn/", "storageReserved": int64(100)}}},
 			map[string]any{
 				"conditions": []any{map[string]any{"type": "Ready", "status": "True"}, map[string]any{"type": "Schedulable", "status": "True"}},
 				"diskStatus": map[string]any{"d1": map[string]any{"storageMaximum": int64(1000), "storageAvailable": int64(700), "storageScheduled": int64(300),
-					"conditions":       []any{map[string]any{"type": "Ready", "status": "True"}},
+					"conditions":       []any{map[string]any{"type": "Ready", "status": "True"}, map[string]any{"type": "Schedulable", "status": "True"}},
 					"scheduledReplica": map[string]any{"pvc-a-r1": int64(1), "pvc-b-r1": int64(1)}}},
 			}),
 		lhObj("RecurringJob", "nightly", map[string]any{"task": "snapshot", "cron": "0 3 * * *", "retain": int64(7), "concurrency": int64(1), "groups": []any{"default"}}, map[string]any{}),
@@ -83,7 +87,18 @@ func TestLonghornJoinsVolumesToAppsAndSummarises(t *testing.T) {
 		lhObj("EngineImage", "ei-1", map[string]any{"image": "longhornio/longhorn-engine:v1.12.1"}, map[string]any{"version": "v1.12.1", "state": "deployed"}),
 		&unstructured.Unstructured{Object: map[string]any{"apiVersion": "longhorn.io/v1beta2", "kind": "Setting",
 			"metadata": map[string]any{"name": "default-replica-count", "namespace": "longhorn-system"}, "value": `{"v1":"1","v2":"1"}`}},
+		&unstructured.Unstructured{Object: map[string]any{"apiVersion": "longhorn.io/v1beta2", "kind": "Setting",
+			"metadata": map[string]any{"name": "storage-over-provisioning-percentage", "namespace": "longhorn-system"}, "value": "200"}},
 		route,
+		// a same-named Service routed from another namespace must not steer the UI link
+		&unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "traefik.io/v1alpha1", "kind": "IngressRoute",
+			"metadata": map[string]any{"name": "decoy", "namespace": "aaa-tenant"},
+			"spec": map[string]any{"routes": []any{map[string]any{
+				"match":    "Host(`projects.sujaykumar.dev`) && PathPrefix(`/decoy`)",
+				"services": []any{map[string]any{"name": "longhorn-frontend", "port": int64(80)}},
+			}}},
+		}},
 	)
 
 	li, err := co.Longhorn(context.Background())
@@ -101,20 +116,29 @@ func TestLonghornJoinsVolumesToAppsAndSummarises(t *testing.T) {
 		byName[v.Name] = i
 	}
 	a := li.Volumes[byName["pvc-a"]]
-	if a.App != "airlift" || a.Workload != "airlift" || a.WorkloadKind != "Deployment" || a.Size != 1073741824 || a.HealthyReplicas != 1 || a.Snapshots != 1 {
+	if a.App != "airlift" || a.Workload != "airlift" || a.WorkloadKind != "Deployment" || a.Size != 1073741824 || a.HealthyReplicas != 1 || !a.ReplicasKnown || a.Snapshots != 1 {
 		t.Errorf("airlift volume = %+v", a)
 	}
 	b := li.Volumes[byName["pvc-b"]]
-	if b.App != "" || b.Workload != "nats" || b.WorkloadKind != "StatefulSet" || b.Replicas != 2 || b.HealthyReplicas != 1 {
+	if b.App != "" || b.Workload != "nats" || b.WorkloadKind != "StatefulSet" || b.Replicas != 2 || b.HealthyReplicas != 1 || !b.ReplicasKnown {
 		t.Errorf("nats volume = %+v", b)
+	}
+	if c := li.Volumes[byName["pvc-c"]]; c.ReplicasKnown {
+		t.Errorf("a detached volume's replicas are unknown, got %+v", c)
 	}
 	s := li.Summary
 	if s.Volumes != 3 || s.Healthy != 1 || s.Degraded != 1 || s.Detached != 1 || s.Snapshots != 1 ||
 		s.StorageMax != 1000 || s.StorageAvailable != 700 || s.StorageScheduled != 300 || s.StorageReserved != 100 ||
-		s.Nodes != 1 || s.NodesReady != 1 || s.NodesSchedulable != 1 || s.BackupsEnabled {
+		s.StorageSchedulable != 1800 || // (1000 − 100) × 200%
+		s.Nodes != 1 || s.NodesReady != 1 || s.NodesSchedulable != 1 ||
+		s.BackupTargetReady || s.BackupJobs != 0 || s.BackupsScheduled {
 		t.Errorf("summary = %+v", s)
 	}
-	if n := li.Nodes; len(n) != 1 || len(n[0].Disks) != 1 || n[0].Disks[0].Replicas != 2 || n[0].Disks[0].Path != "/var/lib/longhorn/" || !n[0].Disks[0].Ready {
+	if li.OverProvisioningPct != 200 {
+		t.Errorf("over-provisioning = %d", li.OverProvisioningPct)
+	}
+	if n := li.Nodes; len(n) != 1 || len(n[0].Disks) != 1 || n[0].Disks[0].Replicas != 2 || n[0].Disks[0].Path != "/var/lib/longhorn/" || !n[0].Disks[0].Ready ||
+		!n[0].Disks[0].Schedulable || n[0].Disks[0].SchedulableMax != 1800 {
 		t.Errorf("nodes = %+v", n)
 	}
 	if j := li.RecurringJobs; len(j) != 1 || j[0].Task != "snapshot" || j[0].Retain != 7 || len(j[0].Groups) != 1 {
@@ -148,6 +172,30 @@ func TestLonghornNotInstalledOrForbidden(t *testing.T) {
 	}
 }
 
+// Backups are "scheduled" only with a ready target AND a recurring backup job;
+// a configured target alone isn't a backup.
+func TestLonghornBackupsScheduled(t *testing.T) {
+	target := lhObj("BackupTarget", "default", map[string]any{"backupTargetURL": "s3://bucket@us-east-1/"}, map[string]any{"available": true})
+	vol := lhObj("Volume", "pvc-a", map[string]any{"size": "1"}, map[string]any{"state": "attached", "robustness": "healthy"})
+	snapJob := lhObj("RecurringJob", "snap", map[string]any{"task": "snapshot", "cron": "0 * * * *"}, map[string]any{})
+	backupJob := lhObj("RecurringJob", "nightly-backup", map[string]any{"task": "backup", "cron": "0 3 * * *"}, map[string]any{})
+
+	li, err := lhCollector(t, vol, target, snapJob).Longhorn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := li.Summary; !s.BackupTargetReady || s.BackupJobs != 0 || s.BackupsScheduled {
+		t.Errorf("target without a backup job: %+v", s)
+	}
+	li, _ = lhCollector(t, vol, target, snapJob, backupJob).Longhorn(context.Background())
+	if s := li.Summary; !s.BackupTargetReady || s.BackupJobs != 1 || !s.BackupsScheduled {
+		t.Errorf("target + backup job: %+v", s)
+	}
+	if li.BackupTarget.URL != "s3://bucket@us-east-1/" {
+		t.Errorf("s3 bucket@region must survive redaction: %q", li.BackupTarget.URL)
+	}
+}
+
 func TestLonghornHelpers(t *testing.T) {
 	if numInt("1073741824") != 1073741824 || numInt(int64(5)) != 5 || numInt(float64(7)) != 7 || numInt(nil) != 0 {
 		t.Error("numInt")
@@ -155,11 +203,21 @@ func TestLonghornHelpers(t *testing.T) {
 	if settingV1(`{"v1":"2","v2":"1"}`) != "2" || settingV1("3") != "3" {
 		t.Error("settingV1")
 	}
+	for p, want := range map[string]bool{"/longhorn": true, "/a/b-c_d.e~f": true, "/": false, "//evil.example": false, "/x@evil": false, "/a b": false, "longhorn": false, "": false} {
+		if got := safeUIPath(p); got != want {
+			t.Errorf("safeUIPath(%q) = %v, want %v", p, got, want)
+		}
+	}
 	for in, want := range map[string]string{
-		"s3://bucket@us-east-1/":        "s3://bucket@us-east-1/",
-		"cifs://user:hunter2@nas/share": "cifs://user@nas/share",
-		"nfs://nas:/export":             "nfs://nas:/export",
-		"":                              "",
+		"s3://bucket@us-east-1/":             "s3://bucket@us-east-1/",
+		"azblob://container@blob.example/x/": "azblob://container@blob.example/x/",
+		"nfs://nas:/export":                  "nfs://nas:/export",
+		"cifs://user@nas/share":              "cifs://user@nas/share",
+		"cifs://user:hunter2@nas/share":      "cifs://***@nas/share",
+		"cifs://user:1234/x@nas/share":       "cifs://***@nas/share",
+		"cifs://user:p@ss#w?rd%zz@nas/share": "cifs://***@nas/share",
+		"cifs://user:pa ss@nas":              "cifs://***@nas",
+		"":                                   "",
 	} {
 		if got := redactURL(in); got != want {
 			t.Errorf("redactURL(%q) = %q, want %q", in, got, want)

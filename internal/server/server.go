@@ -1,6 +1,6 @@
 // Package server exposes the read-only landscape API and the embedded UI, behind
-// an admin-password gate. The same session also gates other in-cluster UIs
-// (Longhorn, kubescope) through Traefik ForwardAuth (GET /api/forward-auth).
+// an admin-password gate. The same session also gates the Longhorn UI through
+// Traefik ForwardAuth (GET /api/forward-auth).
 package server
 
 import (
@@ -162,13 +162,16 @@ func (s *Server) Handler() http.Handler {
 
 // staticHandler serves the embedded UI and, for unknown non-API paths, falls
 // back to index.html so the client-side router can handle deep-links like
-// /landscape/<app> or /landscape/metrics (a single-page app served under a path
-// prefix). Real assets (app.js, style.css) are served as files; unknown /api/*
+// /landscape/app/<app> or /landscape/metrics (a single-page app served under a
+// path prefix). Real assets (app.js, style.css) are served as files; unknown /api/*
 // paths 404 rather than returning the shell.
 func (s *Server) staticHandler() http.Handler {
 	sub, _ := fs.Sub(webFS, "web")
 	fileSrv := http.FileServer(http.FS(sub))
-	shell := s.shell(sub)
+	index, err := fs.ReadFile(sub, "index.html")
+	if err != nil {
+		index = []byte("landscape UI missing from this build")
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		clean := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
 		if clean == "api" || strings.HasPrefix(clean, "api/") {
@@ -186,25 +189,43 @@ func (s *Server) staticHandler() http.Handler {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache")
 		if r.Method != http.MethodHead {
-			_, _ = w.Write(shell)
+			_, _ = w.Write(withBase(index, mountBase(r)))
 		}
 	})
 }
 
-// shell is index.html with a <base href> naming the console's mount path (the
-// path of LANDSCAPE_PUBLIC_URL, e.g. /landscape/; "/" when unset). The UI's
-// asset and API URLs are relative, so the base keeps them resolving under the
-// mount from nested routes like /landscape/app/airlift; the client-side router
-// reads it back for its own paths.
-func (s *Server) shell(sub fs.FS) []byte {
-	index, err := fs.ReadFile(sub, "index.html")
-	if err != nil {
-		return []byte("landscape UI missing from this build")
+// mountBase is where the console is mounted for this request: the prefix
+// Traefik's stripPrefix middleware removed (it sets X-Forwarded-Prefix) when it
+// is a plain path, else "/" — so a port-forward or a local run, which reach the
+// console at the root, still load. The UI's asset/API URLs are relative, so
+// the <base href> keeps them under the mount from nested routes like
+// /landscape/app/airlift; the client-side router reads it back.
+func mountBase(r *http.Request) string {
+	p := r.Header.Get("X-Forwarded-Prefix")
+	if !safeMount(p) {
+		return "/"
 	}
-	base := "/"
-	if u, err := url.Parse(s.opt.PublicURL); err == nil && u.Path != "" && u.Path != "/" {
-		base = strings.TrimSuffix(u.Path, "/") + "/"
+	return strings.TrimSuffix(p, "/") + "/"
+}
+
+// safeMount accepts "/segment[/segment…]" of URL-safe characters only — the
+// value is written into HTML, and must never name another host ("//x").
+func safeMount(p string) bool {
+	if len(p) < 2 || len(p) > 256 || p[0] != '/' || p[1] == '/' {
+		return false
 	}
+	for _, c := range p {
+		ok := c == '/' || c == '-' || c == '_' || c == '.' || c == '~' ||
+			(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// withBase writes <base href="…"> as the first element of <head>.
+func withBase(index []byte, base string) []byte {
 	tag := `<base href="` + html.EscapeString(base) + `">`
 	return []byte(strings.Replace(string(index), "<head>", "<head>\n"+tag, 1))
 }
@@ -243,7 +264,7 @@ func (s *Server) sessionH(w http.ResponseWriter, r *http.Request) {
 }
 
 // forwardAuthH is the Traefik ForwardAuth target that gates other in-cluster UIs
-// (Longhorn, kubescope) behind this console's session. Traefik sends the original
+// (today the Longhorn UI) behind this console's session. Traefik sends the original
 // request's headers (so the ls_session cookie, Path=/, comes along) plus
 // X-Forwarded-Method/-Uri; a 2xx lets the request through to the gated UI, and
 // anything else is returned to the browser as-is. So: a page navigation without a
@@ -272,7 +293,7 @@ func (s *Server) forwardAuthH(w http.ResponseWriter, r *http.Request) {
 // crossOriginWrite reports a gated request that another origin initiated with a
 // state-changing method, or as a WebSocket. The session cookie is SameSite=Lax,
 // which still lets sibling subdomains (same-site) ride it — e.g. a form POST that
-// restarts a workload in kubescope or acts on a Longhorn volume — so the gate
+// acts on a Longhorn volume — so the gate
 // checks the origin itself: Sec-Fetch-Site, else Origin vs the forwarded host
 // (the rule of Go's http.CrossOriginProtection). Top-level GET navigations from
 // elsewhere stay allowed; non-browser clients (no headers) are unaffected.

@@ -58,12 +58,13 @@ resource/verb, add it to `apps/landscape.yaml` in the infra repo (chart
 ## HTTP surface
 
 Public: `GET /healthz`, `GET /api/info`, `GET /api/forward-auth`. Auth (POST)
-`/api/login`, `/api/logout`, `/api/session` (lists the Tools once signed in).
+`/api/login`, `/api/logout`, `/api/session`.
 Behind the `ls_session` cookie: `GET /api/graph`, `GET /api/metrics`,
 `GET /api/app/{name}`, `GET /api/traefik`, `GET /api/storage`, `GET /api/longhorn`,
 … Everything else is the embedded UI at `/`: the shell gets a `<base href>` for
-the mount (the path of `LANDSCAPE_PUBLIC_URL`, else `/`) so its relative asset/API
-URLs resolve from nested client routes. Session = a stateless, expiring token `v2.<expiry>.<HMAC-SHA256>` whose
+the mount — the prefix Traefik stripped (`X-Forwarded-Prefix`, validated as a
+plain path), else `/` (port-forward, local) — so its relative asset/API URLs
+resolve from nested client routes. Session = a stateless, expiring token `v2.<expiry>.<HMAC-SHA256>` whose
 key is PBKDF2(admin password) mixed with the optional random
 `LANDSCAPE_SESSION_KEY` (derived once at startup) — survives restarts/redeploys,
 **expires server-side after 12 h** (also the cookie lifetime), canonical expiry
@@ -79,7 +80,7 @@ Sec-Fetch-Site, else Origin vs `X-Forwarded-Host`), because `SameSite=Lax` still
 admits sibling subdomains. The redirect is an **absolute** URL (`LANDSCAPE_PUBLIC_URL`, else
 Traefik's `X-Forwarded-Proto/Host`): Traefik resolves a relative `Location`
 against the auth address, i.e. the in-cluster service. Successful checks are not
-logged (they run on every gated request). The gated UIs' own powers (kubescope runs cluster-admin) are theirs,
+logged (they run on every gated request). The gated UI's own powers (the Longhorn UI can act on volumes) are its own,
 not landscape's — landscape's ServiceAccount stays read-only. The admin
 password is the shared SOPS secret `projects-admin` (key `ADMIN_PASSWORD`,
 `apps/secrets/projects-admin.enc.yaml` in infra, one copy per consuming

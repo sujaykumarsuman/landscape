@@ -3,7 +3,6 @@ package collect
 import (
 	"context"
 	"encoding/json"
-	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -35,8 +34,11 @@ func lhGVR(res string) schema.GroupVersionResource {
 }
 
 // longhornUIService is the Service the Longhorn chart puts in front of the UI;
-// the IngressRoute that targets it gives the UI's public path.
-const longhornUIService = "longhorn-frontend"
+// the IngressRoute (in longhornNamespace) that targets it gives the UI's path.
+const (
+	longhornUIService = "longhorn-frontend"
+	longhornNamespace = "longhorn-system"
+)
 
 // Longhorn builds the Longhorn view. Volumes are the anchor read: without it
 // there is nothing to show, so its errors decide the outcome (absent API →
@@ -57,16 +59,25 @@ func (co *Collector) Longhorn(ctx context.Context) (*model.LonghornInfo, error) 
 	li.Installed = true
 	warn := func(what string, err error) { li.Warnings = append(li.Warnings, what+": "+err.Error()) }
 
-	// healthy replicas per volume: RW entries in the engine's replica mode map
+	// healthy replicas per volume: RW entries in a *running* engine's replica
+	// mode map. A detached volume has no running engine (unknown, not 0), and a
+	// volume mid-migration can have two — take the best, never the sum.
 	healthy := map[string]int{}
 	if engines, err := co.list(ctx, gvrLHEngine); err == nil {
 		for _, e := range engines {
-			vol, _, _ := unstructured.NestedString(e.Object, "spec", "volumeName")
+			if nestedStr(e.Object, "status", "currentState") != "running" {
+				continue
+			}
+			vol := nestedStr(e.Object, "spec", "volumeName")
 			modes, _, _ := unstructured.NestedMap(e.Object, "status", "replicaModeMap")
+			rw := 0
 			for _, m := range modes {
 				if m == "RW" {
-					healthy[vol]++
+					rw++
 				}
+			}
+			if cur, seen := healthy[vol]; !seen || rw > cur {
+				healthy[vol] = rw
 			}
 		}
 	} else {
@@ -89,22 +100,22 @@ func (co *Collector) Longhorn(ctx context.Context) (*model.LonghornInfo, error) 
 	for _, v := range vols {
 		o := v.Object
 		vol := model.LHVolume{
-			Name:            v.GetName(),
-			Size:            nestedInt(o, "spec", "size"),
-			ActualSize:      nestedInt(o, "status", "actualSize"),
-			Replicas:        int(nestedInt(o, "spec", "numberOfReplicas")),
-			HealthyReplicas: healthy[v.GetName()],
-			State:           nestedStr(o, "status", "state"),
-			Robustness:      nestedStr(o, "status", "robustness"),
-			Node:            nestedStr(o, "status", "currentNodeID"),
-			DataEngine:      nestedStr(o, "spec", "dataEngine"),
-			AccessMode:      nestedStr(o, "spec", "accessMode"),
-			PVCNamespace:    nestedStr(o, "status", "kubernetesStatus", "namespace"),
-			PVC:             nestedStr(o, "status", "kubernetesStatus", "pvcName"),
-			LastBackupAt:    nestedStr(o, "status", "lastBackupAt"),
-			Snapshots:       snapshots[v.GetName()],
-			AgeSeconds:      int64(time.Since(v.GetCreationTimestamp().Time).Seconds()),
+			Name:         v.GetName(),
+			Size:         nestedInt(o, "spec", "size"),
+			ActualSize:   nestedInt(o, "status", "actualSize"),
+			Replicas:     int(nestedInt(o, "spec", "numberOfReplicas")),
+			State:        nestedStr(o, "status", "state"),
+			Robustness:   nestedStr(o, "status", "robustness"),
+			Node:         nestedStr(o, "status", "currentNodeID"),
+			DataEngine:   nestedStr(o, "spec", "dataEngine"),
+			AccessMode:   nestedStr(o, "spec", "accessMode"),
+			PVCNamespace: nestedStr(o, "status", "kubernetesStatus", "namespace"),
+			PVC:          nestedStr(o, "status", "kubernetesStatus", "pvcName"),
+			LastBackupAt: nestedStr(o, "status", "lastBackupAt"),
+			Snapshots:    snapshots[v.GetName()],
+			AgeSeconds:   int64(time.Since(v.GetCreationTimestamp().Time).Seconds()),
 		}
+		vol.HealthyReplicas, vol.ReplicasKnown = healthy[v.GetName()]
 		if wls, _, _ := unstructured.NestedSlice(o, "status", "kubernetesStatus", "workloadsStatus"); len(wls) > 0 {
 			if wm, ok := wls[0].(map[string]any); ok {
 				vol.Workload, vol.WorkloadKind = asString(wm["workloadName"]), asString(wm["workloadType"])
@@ -141,9 +152,15 @@ func (co *Collector) Longhorn(ctx context.Context) (*model.LonghornInfo, error) 
 		return a.Name < b.Name
 	})
 
+	li.OverProvisioningPct = 100 // Longhorn's default
+	if st, err := co.c.Dynamic.Resource(gvrLHSetting).Namespace(longhornNamespace).Get(ctx, "storage-over-provisioning-percentage", metav1.GetOptions{}); err == nil {
+		if pct, err := strconv.Atoi(settingV1(nestedStr(st.Object, "value"))); err == nil && pct > 0 {
+			li.OverProvisioningPct = pct
+		}
+	}
 	if nodes, err := co.list(ctx, gvrLHNode); err == nil {
 		for _, n := range nodes {
-			li.Nodes = append(li.Nodes, lhNode(n, &li.Summary))
+			li.Nodes = append(li.Nodes, lhNode(n, &li.Summary, li.OverProvisioningPct))
 		}
 		sort.Slice(li.Nodes, func(i, j int) bool { return li.Nodes[i].Name < li.Nodes[j].Name })
 	} else {
@@ -154,11 +171,15 @@ func (co *Collector) Longhorn(ctx context.Context) (*model.LonghornInfo, error) 
 		for _, j := range jobs {
 			o := j.Object
 			groups, _, _ := unstructured.NestedStringSlice(o, "spec", "groups")
+			task := nestedStr(o, "spec", "task")
 			li.RecurringJobs = append(li.RecurringJobs, model.LHRecurringJob{
-				Name: j.GetName(), Task: nestedStr(o, "spec", "task"), Cron: nestedStr(o, "spec", "cron"),
+				Name: j.GetName(), Task: task, Cron: nestedStr(o, "spec", "cron"),
 				Retain: int(nestedInt(o, "spec", "retain")), Concurrency: int(nestedInt(o, "spec", "concurrency")),
 				Groups: groups,
 			})
+			if strings.HasPrefix(task, "backup") { // backup, backup-force-create
+				li.Summary.BackupJobs++
+			}
 		}
 		sort.Slice(li.RecurringJobs, func(i, j int) bool { return li.RecurringJobs[i].Name < li.RecurringJobs[j].Name })
 	} else {
@@ -183,7 +204,7 @@ func (co *Collector) Longhorn(ctx context.Context) (*model.LonghornInfo, error) 
 			t.Message = msg
 		}
 		li.BackupTarget = t
-		li.Summary.BackupsEnabled = t.URL != "" && t.Available
+		li.Summary.BackupTargetReady = t.URL != "" && t.Available
 	} else if err != nil {
 		warn("backuptargets", err)
 	}
@@ -198,17 +219,67 @@ func (co *Collector) Longhorn(ctx context.Context) (*model.LonghornInfo, error) 
 		warn("engineimages", err)
 	}
 
-	if st, err := co.c.Dynamic.Resource(gvrLHSetting).Namespace("longhorn-system").Get(ctx, "default-replica-count", metav1.GetOptions{}); err == nil {
+	li.Summary.BackupsScheduled = li.Summary.BackupTargetReady && li.Summary.BackupJobs > 0
+
+	if st, err := co.c.Dynamic.Resource(gvrLHSetting).Namespace(longhornNamespace).Get(ctx, "default-replica-count", metav1.GetOptions{}); err == nil {
 		li.DefaultReplicas = settingV1(nestedStr(st.Object, "value"))
 	}
 
-	li.UIPath = co.ingressRoutes(ctx)[longhornUIService]
+	li.UIPath = co.longhornUIPath(ctx)
 	return li, nil
 }
 
+// longhornUIPath finds the public path of the Longhorn UI: an IngressRoute in
+// longhorn-system that routes a PathPrefix to the longhorn-frontend Service.
+// Only that namespace counts (a same-named Service elsewhere must not steer the
+// console's links), and the path must be a plain absolute path — it becomes a
+// link, so nothing that could turn into another host ("//x", "@x").
+func (co *Collector) longhornUIPath(ctx context.Context) string {
+	irs, err := co.c.Dynamic.Resource(gvrIngressRoute).Namespace(longhornNamespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return ""
+	}
+	for _, ir := range irs.Items {
+		routes, _, _ := unstructured.NestedSlice(ir.Object, "spec", "routes")
+		for _, r := range routes {
+			rm, ok := r.(map[string]any)
+			if !ok || !strings.Contains(asString(rm["match"]), "PathPrefix(`") {
+				continue
+			}
+			svcs, _, _ := unstructured.NestedSlice(rm, "services")
+			for _, sv := range svcs {
+				sm, _ := sv.(map[string]any)
+				if asString(sm["name"]) != longhornUIService {
+					continue
+				}
+				if p := extractPathPrefix(asString(rm["match"])); safeUIPath(p) {
+					return strings.TrimSuffix(p, "/")
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// safeUIPath accepts "/segment[/segment…]" of URL-safe characters only.
+func safeUIPath(p string) bool {
+	if len(p) < 2 || p[0] != '/' || p[1] == '/' {
+		return false
+	}
+	for _, c := range p {
+		ok := c == '/' || c == '-' || c == '_' || c == '.' || c == '~' ||
+			(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // lhNode maps a Longhorn node CR (spec.disks + status.diskStatus) and adds its
-// capacity to the summary.
-func lhNode(n unstructured.Unstructured, sum *model.LHSummary) model.LHNode {
+// capacity to the summary; a schedulable disk contributes (max − reserved) ×
+// over-provisioning % to the scheduling budget.
+func lhNode(n unstructured.Unstructured, sum *model.LHSummary, overPct int) model.LHNode {
 	o := n.Object
 	node := model.LHNode{Name: n.GetName(), Ready: condTrue(o, "Ready"), Schedulable: condTrue(o, "Schedulable")}
 	sum.Nodes++
@@ -236,12 +307,16 @@ func lhNode(n unstructured.Unstructured, sum *model.LHSummary) model.LHNode {
 			d.Replicas = len(reps)
 		}
 		d.Ready = condTrue(ds, "Ready")
-		d.Schedulable = condTrue(ds, "Schedulable")
-		node.Disks = append(node.Disks, d)
+		d.Schedulable = condTrue(ds, "Schedulable") && asBoolDefault(sd["allowScheduling"], true)
+		if d.Schedulable && node.Schedulable {
+			d.SchedulableMax = max(0, d.Max-d.Reserved) * int64(overPct) / 100
+		}
+		node.Disks = append(node.Disks, d) // after every field is set: d is a value
 		sum.StorageMax += d.Max
 		sum.StorageAvailable += d.Available
 		sum.StorageScheduled += d.Scheduled
 		sum.StorageReserved += d.Reserved
+		sum.StorageSchedulable += d.SchedulableMax
 	}
 	sort.Slice(node.Disks, func(i, j int) bool { return node.Disks[i].Name < node.Disks[j].Name })
 	return node
@@ -334,15 +409,28 @@ func settingV1(v string) string {
 	return v
 }
 
-// redactURL drops any password in a backup-target URL's userinfo (credentials
-// belong in the referenced Secret, but never echo one if someone inlined it).
+// redactURL masks inline credentials in a backup-target URL without trusting a
+// URL parser (a password may hold "/", "#", "?" or "@"): whatever sits between
+// "scheme://" and the LAST "@" is masked when it contains a ":" (user:secret).
+// Longhorn's own forms keep their meaning — s3://bucket@region/…,
+// azblob://container@endpoint/…, nfs://host:/path — since credentials belong in
+// the referenced Secret.
 func redactURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil || u.User == nil {
+	i := strings.Index(raw, "://")
+	if i < 0 {
 		return raw
 	}
-	if _, has := u.User.Password(); has {
-		u.User = url.User(u.User.Username())
+	rest := raw[i+3:]
+	at := strings.LastIndex(rest, "@")
+	if at < 0 || !strings.Contains(rest[:at], ":") {
+		return raw
 	}
-	return u.String()
+	return raw[:i+3] + "***" + rest[at:]
+}
+
+func asBoolDefault(v any, def bool) bool {
+	if b, ok := v.(bool); ok {
+		return b
+	}
+	return def
 }

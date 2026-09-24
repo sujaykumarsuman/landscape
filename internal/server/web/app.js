@@ -91,7 +91,7 @@ async function startApp() {
   $("#logout").onclick = async () => { await api("/logout", { method: "POST" }); location.reload(); };
   $$(".nav button").forEach(b => b.onclick = () => setView(b.dataset.view));
   $("#crumb .home").onclick = () => setView("map");
-  // adopt the deep-linked URL as the initial view (e.g. /landscape/airlift)
+  // adopt the deep-linked URL as the initial view (e.g. /landscape/app/airlift)
   const r = routeFromURL();
   applyRoute(r.view, r.appName);
   history.replaceState(routeState(), "", pathFor(state.view, state.appName));
@@ -121,10 +121,11 @@ function pathFor(view, appName) {
 function routeState() { return { view: state.view, appName: state.appName }; }
 function routeFromURL() {
   const b = currentBase(), p = location.pathname;
+  if (p + "/" === b) return { view: "map", appName: null }; // the bare mount (…/landscape?x=1)
   const rest = p.startsWith(b) ? p.slice(b.length) : p.replace(/^\/+/, "");
   let segs;
   try { segs = rest.split("/").filter(Boolean).map(decodeURIComponent); } catch (_) { segs = []; }
-  if (!segs.length) return { view: "map", appName: null };
+  if (!segs.length || (segs.length === 1 && segs[0] === "index.html")) return { view: "map", appName: null };
   if (segs[0] === "app") return segs[1] ? { view: "app", appName: segs[1] } : { view: "map", appName: null };
   if (segs.length === 1 && RESERVED[segs[0]]) return { view: segs[0], appName: null };
   if (segs.length === 1) return { view: "app", appName: segs[0] }; // legacy …/<app>; canonicalised on load
@@ -1168,7 +1169,7 @@ function renderStorage(v) {
       const d = p.status === "Bound" ? "s-ok" : (p.status === "Lost" || p.status === "Failed") ? "s-failed" : "s-progressing";
       const lv = li && p.volume ? lhByPV[p.volume] : null;
       const lhCell = !li ? "" : lv
-        ? `<td><span class="pvcst"><span class="dot ${robustDot(lv.robustness)}"></span>${esc(lv.robustness || "unknown")} · ${lv.healthyReplicas}/${lv.replicas}</span></td>`
+        ? `<td><span class="pvcst"><span class="dot ${robustDot(lv.robustness)}"></span>${esc(lv.robustness || "unknown")}${lv.replicasKnown ? ` · ${lv.healthyReplicas}/${lv.replicas}` : ` · ${esc(lv.state || "")}`}</span></td>`
         : `<td class="mono" style="color:var(--mut)">—</td>`;
       return `<tr>
           <td class="mono">${esc(p.namespace)}</td>
@@ -1196,7 +1197,7 @@ function longhornCardHTML(li) {
   const ok = !s.degraded && !s.faulted;
   return `<div class="card lhcard">
     <span class="dot ${ok ? "s-ok" : "s-progressing"}"></span>
-    <div class="lhsum">${esc(`${s.healthy}/${s.volumes} volumes healthy · ${fmtBytes(s.storageScheduled)} provisioned of ${fmtBytes(s.storageMax)} · ${s.backupsEnabled ? "backups on" : "backups off"}`)}</div>
+    <div class="lhsum">${esc(`${s.healthy}/${s.volumes} volumes healthy · ${fmtBytes(s.storageScheduled)} provisioned of ${fmtBytes(s.storageSchedulable)} schedulable · ${backupWord(s)}`)}</div>
     <span class="grow"></span>
     <div class="acts">
       <button id="lhgo" type="button">${icon("disks", 13)} Longhorn details</button>
@@ -1212,6 +1213,12 @@ function fmtBytes(b) {
   let n = b, i = 0;
   while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
   return (n >= 100 || i === 0 ? n.toFixed(0) : n.toFixed(1)) + " " + u[i];
+}
+// backups are only "scheduled" with a ready target AND a recurring backup job
+function backupWord(s) {
+  if (s.backupsScheduled) return "backups scheduled";
+  if (s.backupTargetReady) return "backups not scheduled";
+  return "no backup target";
 }
 function robustDot(r) { return r === "healthy" ? "s-ok" : r === "degraded" ? "s-progressing" : r === "faulted" ? "s-failed" : "s-unknown"; }
 function lhLink(li, route) { return li.uiURL ? li.uiURL + "#/" + route : ""; }
@@ -1234,20 +1241,23 @@ function renderLonghorn(v) {
     <span class="grow"></span>${open}
   </div>`;
 
-  const provPct = s.storageMax ? Math.round(s.storageScheduled / s.storageMax * 100) : 0;
+  // provisioned against Longhorn's scheduling budget ((max − reserved) × over-provisioning %)
+  const provPct = s.storageSchedulable ? Math.round(s.storageScheduled / s.storageSchedulable * 100) : 0;
   const healthyPct = s.volumes ? Math.round(s.healthy / s.volumes * 100) : 100;
   const bt = li.backupTarget;
   const tiles = `<div class="lhgrid"><div class="grid">
     <div class="mcard gauge">${ring(healthyPct, ok ? "#57d39a" : "#f0b429")}<div><div class="h">Volumes</div><div class="big">${s.healthy}/${s.volumes}</div>
       <div class="note">healthy · ${s.degraded} degraded · ${s.faulted} faulted · ${s.detached} detached</div></div></div>
-    <div class="mcard gauge">${ring(provPct, "#35d0c0")}<div><div class="h">Provisioned</div><div class="big sm">${esc(fmtBytes(s.storageScheduled))}</div>
-      <div class="note">of ${esc(fmtBytes(s.storageMax))} · written ${esc(fmtBytes(s.actualUsed))} · reserved ${esc(fmtBytes(s.storageReserved))} · free ${esc(fmtBytes(s.storageAvailable))}</div></div></div>
+    <div class="mcard gauge">${ring(Math.min(100, provPct), provPct >= 90 ? "#f0b429" : "#35d0c0")}<div><div class="h">Provisioned</div><div class="big sm">${esc(fmtBytes(s.storageScheduled))} <span style="font-size:13px;color:var(--mut)">${provPct}%</span></div>
+      <div class="note">of ${esc(fmtBytes(s.storageSchedulable))} schedulable (disk ${esc(fmtBytes(s.storageMax))} − reserved ${esc(fmtBytes(s.storageReserved))}${li.overProvisioningPct && li.overProvisioningPct !== 100 ? ", × " + li.overProvisioningPct + "%" : ""}) · written ${esc(fmtBytes(s.actualUsed))} · disk free ${esc(fmtBytes(s.storageAvailable))}</div></div></div>
     <div class="mcard"><div class="h">Nodes</div><div class="big sm">${s.nodesReady}/${s.nodes} ready</div>
       <div class="note">${s.nodesSchedulable} schedulable · ${s.snapshots} ${s.snapshots === 1 ? "snapshot" : "snapshots"}</div></div>
     <div class="mcard"><div class="h">Backups</div>
-      ${s.backupsEnabled
-        ? `<div class="big sm" style="color:var(--ok)">enabled</div><div class="note">${esc(bt.url)}${bt.lastSyncedAt ? " · synced " + esc(bt.lastSyncedAt) : ""}</div>`
-        : `<div class="big sm" style="color:var(--warn)">off</div><div class="note attn">${esc((bt && (bt.message || (bt.url ? "target unavailable" : ""))) || "no backup target")} — volumes aren't backed up off the node</div>`}
+      ${s.backupsScheduled
+        ? `<div class="big sm" style="color:var(--ok)">scheduled</div><div class="note">${s.backupJobs} recurring backup ${s.backupJobs === 1 ? "job" : "jobs"} · ${esc(bt.url)}${bt.lastSyncedAt ? " · synced " + esc(bt.lastSyncedAt) : ""}</div>`
+        : s.backupTargetReady
+          ? `<div class="big sm" style="color:var(--warn)">not scheduled</div><div class="note attn">target ready (${esc(bt.url)}), but no recurring backup job — volumes aren't backed up</div>`
+          : `<div class="big sm" style="color:var(--warn)">off</div><div class="note attn">${esc((bt && (bt.message || (bt.url ? "target unavailable" : ""))) || "no backup target")} — volumes aren't backed up off the node</div>`}
       ${li.uiURL ? `<div class="note"><a href="${esc(lhLink(li, "backupTarget"))}" target="_blank" rel="noopener" style="color:var(--teal)">configure in Longhorn ${icon("ext", 11)}</a></div>` : ""}
     </div>
   </div></div>`;
@@ -1258,15 +1268,15 @@ function renderLonghorn(v) {
       <th>Volume</th><th>Used by</th><th>Size</th><th>Replicas</th><th>State</th><th>Health</th><th>Snapshots</th><th>Last backup</th><th></th>
     </tr></thead><tbody>` + vols.map(x => {
       const who = x.app
-        ? `<a class="app" data-app="${esc(x.app)}">${esc(x.app)}</a>`
+        ? `<a class="app" href="${esc(pathFor("app", x.app))}" data-app="${esc(x.app)}">${esc(x.app)}</a>`
         : x.workload ? `<span class="mono">${esc(x.workload)}</span> <span style="color:var(--mut);font-size:11px">${esc(x.workloadKind || "")}</span>` : `<span style="color:var(--mut)">—</span>`;
-      const repCls = x.healthyReplicas >= x.replicas ? "ok" : x.healthyReplicas > 0 ? "warn" : "err";
+      const repCls = !x.replicasKnown ? "" : x.healthyReplicas >= x.replicas ? "ok" : x.healthyReplicas > 0 ? "warn" : "err";
       const ui = lhLink(li, "volume/" + encodeURIComponent(x.name));
       return `<tr>
         <td><div class="pvc">${esc(x.pvc ? x.pvcNamespace + "/" + x.pvc : x.name)}</div>${x.pvc ? `<div class="pv">${esc(x.name)}</div>` : ""}</td>
         <td>${who}</td>
         <td class="mono">${esc(fmtBytes(x.actualSize))} <span style="color:var(--mut)">/ ${esc(fmtBytes(x.size))}</span></td>
-        <td class="mono"><span class="rep ${repCls}">${x.healthyReplicas}/${x.replicas}</span></td>
+        <td class="mono">${x.replicasKnown ? `<span class="rep ${repCls}">${x.healthyReplicas}/${x.replicas}</span>` : `<span style="color:var(--mut)" title="no running engine (volume ${esc(x.state || "not attached")})">—/${x.replicas}</span>`}</td>
         <td class="mono">${esc(x.state || "—")}${x.node ? `<span style="color:var(--mut)"> · ${esc(x.node)}</span>` : ""}</td>
         <td><span class="pvcst"><span class="dot ${robustDot(x.robustness)}"></span>${esc(x.robustness || "unknown")}</span></td>
         <td class="mono">${x.snapshots || 0}</td>
@@ -1282,11 +1292,11 @@ function renderLonghorn(v) {
         <span class="chip xs ${n.ready ? "ok" : "warn"}">${n.ready ? "ready" : "not ready"}</span>
         <span class="chip xs ${n.schedulable ? "ok" : "warn"}">${n.schedulable ? "schedulable" : "unschedulable"}</span></div>
       ${(n.disks || []).map(d => {
-        const pct = (x) => d.max ? Math.max(0, Math.min(100, x / d.max * 100)).toFixed(1) : 0;
+        const used = d.schedulableMax ? d.scheduled / d.schedulableMax * 100 : 0;
         return `<div class="lhdisk">
-          <div class="dp"><span>${esc(d.path || d.name)}</span><span>${esc(fmtBytes(d.max))}</span></div>
-          <div class="barbg" title="provisioned ${esc(fmtBytes(d.scheduled))} · reserved ${esc(fmtBytes(d.reserved))}"><div class="barfill sched" style="width:${pct(d.scheduled)}%"></div><div class="barfill resv" style="width:${pct(d.reserved)}%"></div></div>
-          <div class="dn"><span>provisioned ${esc(fmtBytes(d.scheduled))}</span><span>reserved ${esc(fmtBytes(d.reserved))}</span><span>free ${esc(fmtBytes(d.available))}</span><span>${d.replicas} ${d.replicas === 1 ? "replica" : "replicas"}</span></div>
+          <div class="dp"><span>${esc(d.path || d.name)}</span><span>${esc(fmtBytes(d.max))} disk</span></div>
+          <div class="barbg" title="provisioned ${esc(fmtBytes(d.scheduled))} of ${esc(fmtBytes(d.schedulableMax))} schedulable"><div class="barfill ${used >= 90 ? "hot" : "sched"}" style="width:${Math.min(100, used).toFixed(1)}%"></div></div>
+          <div class="dn"><span>provisioned ${esc(fmtBytes(d.scheduled))} of ${esc(fmtBytes(d.schedulableMax))} schedulable (${used.toFixed(0)}%)</span><span>reserved ${esc(fmtBytes(d.reserved))}</span><span>disk free ${esc(fmtBytes(d.available))}</span><span>${d.replicas} ${d.replicas === 1 ? "replica" : "replicas"}</span>${d.schedulable ? "" : `<span style="color:var(--warn)">not schedulable</span>`}</div>
         </div>`;
       }).join("")}
     </div>`).join("") + `</div>`;
@@ -1298,12 +1308,18 @@ function renderLonghorn(v) {
       jobs.map(j => `<tr><td class="mono">${esc(j.name)}</td><td class="mono">${esc(j.task)}</td><td class="mono">${esc(j.cron)}</td><td class="mono">${j.retain}</td><td class="mono">${esc((j.groups || []).join(", ") || "—")}</td></tr>`).join("") +
       `</tbody></table></div>`;
 
-  v.innerHTML = band + tiles + `<div class="lhpage">
+  const warns = (li.warnings || []).length
+    ? `<div class="lhwarn">partial read — ${(li.warnings || []).map(esc).join(" · ")}</div>` : "";
+  v.innerHTML = band + tiles + `<div class="lhpage">${warns}
     <div class="stsec">Volumes</div>${volBody}
     <div class="stsec">Nodes &amp; disks</div>${nodeBody}
     <div class="stsec">Recurring jobs</div>${jobBody}
   </div>`;
-  $$(".lhvol a.app").forEach(a => a.addEventListener("click", () => openApp(a.dataset.app)));
+  // real hrefs for keyboard/middle-click; a plain click stays in-app
+  $$(".lhvol a.app").forEach(a => a.addEventListener("click", (e) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+    e.preventDefault(); openApp(a.dataset.app);
+  }));
 }
 function drawTraefikEdges() {
   const wrap = $("#tfwrap"), svg = $("#tfedges");

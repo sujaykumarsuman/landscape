@@ -35,7 +35,7 @@ button{font-family:var(--sans)}
 #top{display:flex;align-items:center;height:56px;padding:0 20px;border-bottom:1px solid var(--line);background:#0c0f14;gap:0}
 .brand{display:flex;align-items:center;gap:9px;font-weight:600}
 /* Desktop: text nav. Small screens: icon-only (see the max-width:640 block) so
-   the four items fit. min-width:0 + overflow-x is a silent guard so the bar can
+   the five items fit. min-width:0 + overflow-x is a silent guard so the bar can
    never push the page wider than the viewport (brand + rightbar keep their size). */
 .nav{display:flex;gap:4px;margin-left:26px;min-width:0;overflow-x:auto;scrollbar-width:none}
 .nav::-webkit-scrollbar{display:none}
@@ -385,7 +385,7 @@ button{font-family:var(--sans)}
   #top{padding:0 12px}
   .brand{gap:0;font-size:0}
   .nav{margin-left:8px}
-  /* icon-only nav: hide the labels, show the glyphs so all four fit */
+  /* icon-only nav: hide the labels, show the glyphs so all five fit */
   .nav button{padding:0 9px}
   .nav button .nl{display:none}
   .nav button .ni{display:block}
@@ -397,6 +397,15 @@ button{font-family:var(--sans)}
   #health{display:none}
   .grid{grid-template-columns:1fr}
   .mcard.wide{grid-column:span 1}
+}
+/* the narrowest phones: tighten the icon nav and the right bar so the fifth
+   nav item never scrolls out of reach */
+@media(max-width:380px){
+  #top{padding:0 8px}
+  .nav{margin-left:4px;gap:0}
+  .nav button{padding:0 7px}
+  .rightbar{gap:4px}
+  .profile{padding-left:4px}
 }
 
 /* ---------- storage view ---------- */
@@ -433,7 +442,9 @@ button{font-family:var(--sans)}
 .lhvol .rep.ok{color:var(--ok)}.lhvol .rep.warn{color:var(--warn)}.lhvol .rep.err{color:var(--err)}
 .lhvol a.ui{color:var(--mut);display:inline-grid;place-items:center}
 .lhvol a.ui:hover{color:var(--teal)}
-.lhnodes{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
+.lhnodes{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr))}
+.lhdisk .barfill.hot{background:var(--warn)}
+.lhwarn{font-family:var(--mono);font-size:11px;color:var(--warn);overflow-wrap:anywhere}
 .lhnode .row1{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .lhdisk{margin-top:12px}
 .lhdisk .dp{display:flex;justify-content:space-between;gap:8px;font-family:var(--mono);font-size:11.5px;color:var(--dim);margin-bottom:6px}

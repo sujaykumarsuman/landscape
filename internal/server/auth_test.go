@@ -246,3 +246,41 @@ func TestParseTools(t *testing.T) {
 		t.Errorf("empty = %v / %v", tools, bad)
 	}
 }
+
+// With a valid session, the gate still refuses writes and WebSockets that another
+// origin started (a sibling subdomain is same-site, so SameSite=Lax lets the
+// cookie through); same-origin use and plain navigations pass.
+func TestForwardAuthRefusesCrossOriginWrites(t *testing.T) {
+	s, _ := testServer(t)
+	h := s.Handler()
+	c := login(t, h, "hunter2")
+	host := map[string]string{"X-Forwarded-Host": "projects.sujaykumar.dev"}
+	with := func(kv ...string) map[string]string {
+		m := map[string]string{}
+		for k, v := range host {
+			m[k] = v
+		}
+		for i := 0; i+1 < len(kv); i += 2 {
+			m[kv[i]] = kv[i+1]
+		}
+		return m
+	}
+	for name, tc := range map[string]struct {
+		hdr  map[string]string
+		want int
+	}{
+		"same-origin POST":           {with("X-Forwarded-Method", "POST", "Sec-Fetch-Site", "same-origin"), http.StatusNoContent},
+		"same-site POST (subdomain)": {with("X-Forwarded-Method", "POST", "Sec-Fetch-Site", "same-site"), http.StatusForbidden},
+		"cross-site DELETE":          {with("X-Forwarded-Method", "DELETE", "Sec-Fetch-Site", "cross-site"), http.StatusForbidden},
+		"cross-site websocket":       {with("X-Forwarded-Method", "GET", "Sec-Fetch-Mode", "websocket", "Sec-Fetch-Site", "cross-site"), http.StatusForbidden},
+		"same-origin websocket":      {with("X-Forwarded-Method", "GET", "Sec-Fetch-Mode", "websocket", "Sec-Fetch-Site", "same-origin"), http.StatusNoContent},
+		"cross-site GET navigation":  {with("X-Forwarded-Method", "GET", "Sec-Fetch-Mode", "navigate", "Sec-Fetch-Site", "cross-site"), http.StatusNoContent},
+		"POST, foreign Origin only":  {with("X-Forwarded-Method", "POST", "Origin", "https://blog.sujaykumar.dev"), http.StatusForbidden},
+		"POST, own Origin only":      {with("X-Forwarded-Method", "POST", "Origin", "https://projects.sujaykumar.dev"), http.StatusNoContent},
+		"POST, non-browser":          {with("X-Forwarded-Method", "POST"), http.StatusNoContent},
+	} {
+		if rr := forwardAuth(h, c, tc.hdr); rr.Code != tc.want {
+			t.Errorf("%s = %d, want %d", name, rr.Code, tc.want)
+		}
+	}
+}

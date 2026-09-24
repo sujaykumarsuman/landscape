@@ -248,6 +248,10 @@ func (s *Server) sessionH(w http.ResponseWriter, r *http.Request) {
 func (s *Server) forwardAuthH(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if s.authed(r) {
+		if crossOriginWrite(r) {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "cross-origin request refused"})
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -259,6 +263,35 @@ func (s *Server) forwardAuthH(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+}
+
+// crossOriginWrite reports a gated request that another origin initiated with a
+// state-changing method, or as a WebSocket. The session cookie is SameSite=Lax,
+// which still lets sibling subdomains (same-site) ride it — e.g. a form POST that
+// restarts a workload in kubescope or acts on a Longhorn volume — so the gate
+// checks the origin itself: Sec-Fetch-Site, else Origin vs the forwarded host
+// (the rule of Go's http.CrossOriginProtection). Top-level GET navigations from
+// elsewhere stay allowed; non-browser clients (no headers) are unaffected.
+func crossOriginWrite(r *http.Request) bool {
+	switch m := r.Header.Get("X-Forwarded-Method"); {
+	case r.Header.Get("Sec-Fetch-Mode") == "websocket", strings.EqualFold(r.Header.Get("Upgrade"), "websocket"):
+	case m == "", m == http.MethodGet, m == http.MethodHead, m == http.MethodOptions:
+		return false
+	}
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "same-origin", "none":
+		return false
+	case "":
+		// no Fetch Metadata (older browser / non-browser): fall back to Origin
+	default: // same-site, cross-site
+		return true
+	}
+	o := r.Header.Get("Origin")
+	if o == "" {
+		return false
+	}
+	u, err := url.Parse(o)
+	return err != nil || u.Host == "" || !strings.EqualFold(u.Host, r.Header.Get("X-Forwarded-Host"))
 }
 
 // wantsHTML reports whether the gated request is a browser page navigation (worth

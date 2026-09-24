@@ -1,10 +1,10 @@
 # STATUS
 
-_Last updated: 2026-09-24 (v0.9.0)._
+_Last updated: 2026-09-24 (v0.9.1)._
 
 ## Live
 
-- **v0.9.0** at https://projects.sujaykumar.dev/landscape, deployed by GitOps
+- **v0.9.1** at https://projects.sujaykumar.dev/landscape, deployed by GitOps
   (Flux + Helm from `sujaykumarsuman/infra`, `apps/landscape.yaml`).
 - Read-only ClusterRole (see the invariant in `CLAUDE.md`). Admin-password gated
   (SOPS secret `landscape-admin`). The same session gates Longhorn (`/longhorn/`)
@@ -71,6 +71,10 @@ _Last updated: 2026-09-24 (v0.9.0)._
   `LANDSCAPE_GITHUB_OWNER` takes a comma list so `skriptvalley/*` images render
   as your apps; the `sujaykumar.dev/source-workflow` label fixes the workflow
   deep-link for repos not built by `deploy.yml` (kubescope → `release.yml`).
+- **v0.9.1** — the forward-auth gate returns 403 for state-changing or WebSocket
+  requests that another origin started, even with a valid session. `SameSite=Lax`
+  lets sibling subdomains through, so this guards Longhorn and kubescope against
+  forged form POSTs.
 
 ## Later
 

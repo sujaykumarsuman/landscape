@@ -81,7 +81,10 @@ function showLogin() {
     $("#loginerr").textContent = "";
     const r = await api("/login", { method: "POST", body: JSON.stringify({ password: $("#pw").value }) });
     if (r.ok) { if (followNext()) return; lg.classList.add("hide"); startApp(); }
-    else { $("#loginerr").textContent = "Wrong password"; $("#pw").value = ""; $("#pw").focus(); }
+    else {
+      $("#loginerr").textContent = r.status === 429 ? "Too many failed attempts — wait a minute and try again" : "Wrong password";
+      $("#pw").value = ""; $("#pw").focus();
+    }
   };
 }
 async function startApp() {

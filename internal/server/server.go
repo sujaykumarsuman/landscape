@@ -15,6 +15,7 @@ import (
 	"html"
 	"io/fs"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"path"
@@ -52,7 +53,8 @@ type Server struct {
 	opt     Options
 	col     *collect.Collector
 	now     func() time.Time
-	signKey []byte // session HMAC key, derived once in New (see signingKey)
+	signKey []byte       // session HMAC key, derived once in New (see signingKey)
+	fails   *failLimiter // failed-login budget (limit.go)
 
 	mu        sync.Mutex
 	graph     *model.Graph
@@ -82,8 +84,10 @@ func New(col *collect.Collector, opt Options) *Server {
 	if opt.CacheTTL == 0 {
 		opt.CacheTTL = 10 * time.Second
 	}
-	return &Server{opt: opt, col: col, now: time.Now, signKey: signingKey(opt.AdminPassword, opt.SessionKey),
+	s := &Server{opt: opt, col: col, now: time.Now, signKey: signingKey(opt.AdminPassword, opt.SessionKey),
 		apps: map[string]appEntry{}, misc: map[string]cacheEntry{}}
+	s.fails = newFailLimiter(func() time.Time { return s.now() })
+	return s
 }
 
 // signingKey derives the session HMAC key from the admin password with PBKDF2
@@ -386,12 +390,20 @@ func (s *Server) loginH(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	if ok, wait := s.fails.peek(); !ok {
+		w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(wait.Seconds()))))
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many failed logins — wait a moment"})
+		return
+	}
 	var body struct {
 		Password string `json:"password"`
 	}
 	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body)
-	if !s.adminEnabled() || subtle.ConstantTimeCompare([]byte(body.Password), []byte(s.opt.AdminPassword)) != 1 {
-		time.Sleep(400 * time.Millisecond) // gentle brake on guessing
+	// compare digests so neither the value nor its length leaks through timing
+	got, want := sha256.Sum256([]byte(body.Password)), sha256.Sum256([]byte(s.opt.AdminPassword))
+	if !s.adminEnabled() || subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
+		s.fails.spend()
+		time.Sleep(loginFailDelay) // gentle brake on guessing
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "wrong password"})
 		return
 	}

@@ -68,7 +68,10 @@ other UIs (Longhorn `/longhorn/`, kubescope `/kubescope/` — IngressRoutes in t
 infra repo): 204 when the session is valid; otherwise a page navigation gets a
 302 to the login with `?next=<X-Forwarded-Uri>` (same-host paths only — checked
 server-side and again in the UI before following) and API/WebSocket/non-GET calls
-get a 401. The redirect is an **absolute** URL (`LANDSCAPE_PUBLIC_URL`, else
+get a 401. A signed-in request that another origin started with a
+state-changing method or as a WebSocket gets a 403 (`crossOriginWrite`:
+Sec-Fetch-Site, else Origin vs `X-Forwarded-Host`), because `SameSite=Lax` still
+admits sibling subdomains. The redirect is an **absolute** URL (`LANDSCAPE_PUBLIC_URL`, else
 Traefik's `X-Forwarded-Proto/Host`): Traefik resolves a relative `Location`
 against the auth address, i.e. the in-cluster service. Successful checks are not
 logged (they run on every gated request). The gated UIs' own powers (kubescope runs cluster-admin) are theirs,
